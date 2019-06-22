@@ -7,6 +7,7 @@ mjpeg and the resolution of the images.
 """
 
 import time
+import datetime 
 import picamera
 import numpy as np
 import sys
@@ -16,7 +17,7 @@ import cv2
 import subprocess as sp
 import argparse
 
-def argumentChecking(sensor_mode, res, framerate, duration):
+def argumentChecking(sensor_mode, res, framerate, duration, quality):
 	# Check max resolution
 	if res[0] > 3820:
 		print("[WARNING] Max width is 3820, set to 3820")
@@ -29,7 +30,7 @@ def argumentChecking(sensor_mode, res, framerate, duration):
 		if sensor_mode is not 2:
 			print("[WARNING][MJPEG] sensor_mode set to 2")
 			sensor_mode = 2
-		if not 0.1 < framerate < 15:
+		if not 0.1 <= framerate <= 15:
 			print("[WARNING][MJPEG] Framerate set between 0.1 and 15 fps")
 			framerate = 15 if framerate>15 else framerate
 			framerate = 0.1 if framerate < 0.1 else framerate
@@ -40,6 +41,8 @@ def argumentChecking(sensor_mode, res, framerate, duration):
 		if sensor_mode is not 1:
 			print("[WARNING][H264] sensor_mode set to 1")
 			sensor_mode = 1
+		if not 10 <= quality <= 40:
+			print("[WARNING][H264] quality set to default (0)")
 	return sensor_mode, res, framerate, duration
 
 # construct the argument parser and parse the arguments
@@ -48,6 +51,7 @@ ap.add_argument("-d", "--duration", type=int, default=10, help="recording durati
 ap.add_argument("-fps", "--fps", type=int, default=25, help="fps")
 ap.add_argument("-s", "--sensor_mode", type=int, default=1, help="sensor_mode")
 ap.add_argument("-r", "--resolution", type=str, default='1920x1080', help="Resolution in the format wxh. Example: 1920x1080")
+ap.add_argument("-q", "--quality", type=int, default=0, help="Quality parameter for video recording. No impact on mjpeg.")
 args = vars(ap.parse_args())
 
 
@@ -58,7 +62,8 @@ if __name__ == '__main__':
 	res = tuple(int(x) for x in args["resolution"].split('x'))
 	framerate = args["fps"]
 	duration = args["duration"]
-	sensor_mode, res, framerate, duration = argumentChecking(sensor_mode, res, framerate, duration)
+	quality = args["quality"]
+	sensor_mode, res, framerate, duration = argumentChecking(sensor_mode, res, framerate, duration, quality)
 	# 2. Create a specific folder that will only contain the latest movie, delete the previous one.
 	folderName = 'newVideo'
 	if os.path.isdir(folderName):
@@ -75,14 +80,15 @@ if __name__ == '__main__':
 		camera.sensor_mode = sensor_mode
 		camera.resolution = res # WARNING: defaults to 1280x720 when the tv off!
 		camera.framerate = framerate
-		# WARNING: H264 IS ONLY SUPPORTED UP TO 1920x1080, MJPEG BEYOND
+		
+		# WARNING: [H264] IS ONLY SUPPORTED UP TO 1920x1080, [MJPEG] BEYOND
 		codec = 'h264' if max(res) <= 1920 else 'mjpeg'
 		camera.sensor_mode = 1 if  max(res) <= 1920 else 2
 		fileName += codec # h264 | mjpeg depending on the above
 		time.sleep(2) # let the camera warm up and set gain/white balance
-		
+
 		# 2. Recording the movie
-		camera.start_recording(fileName)
+		camera.start_recording(fileName, quality=quality)
 		print("[RPi] Recording {}".format(fileName))
 		camera.wait_recording(duration)
 		camera.stop_recording()
@@ -97,7 +103,12 @@ if __name__ == '__main__':
 			sp.run(['rm', fileName]) # Delete h264 file
 		else:
 			convertedFile = fileName
-		sp.run(['mv', convertedFile, folderName+'/'+convertedFile])
-		print('[RPi] Generated {} ({:.1f} Mb)'.format(convertedFile, os.path.getsize(folderName+'/'+convertedFile)//2**20))
+
+		# 4. Add a unique timestamp and move to output folder
+		now = datetime.datetime.now()
+		ts = now.strftime('%y%m%d_%H%M%S')
+		convertedFileTimestamped = ts+'_'+convertedFile
+		print('[RPi] Generated {} ({:.1f} Mb)'.format(convertedFile, os.path.getsize(convertedFile)//2**20))
+		sp.run(['mv', convertedFile, folderName+'/'+convertedFileTimestamped])
 
 # Read the mjpeg file: vlc --demux=mjpeg --mjpeg-fps=5 video.mjpeg 
