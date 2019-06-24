@@ -96,12 +96,21 @@ OPENCV_OBJECT_TRACKERS = {
 }
 
 
-# I.3. Cache the video
+# I.3. Cache the video & create folder architecture
 print("Caching video...")
 t0 = time.perf_counter()
 videoPath = args["video"]
 vs = cv2.VideoCapture(videoPath)
+# I.3.1 Creating the folder architecture
+videoFolder = os.path.split(videoPath)[0]
 ts = os.path.split(videoPath)[1][:14]
+sourceBbPath = os.path.join(videoFolder, ts+"sourceBB.pickle")
+extrapolatedBbPath = os.path.join(videoFolder, ts+"extrapolatedBB.pickle")
+cropFolder = os.path.join(os.path.split(videoPath)[0], ts+'NN_crops')
+nnSizeCropsFolder = os.path.join(cropFolder, 'nnSizeCrops')
+cropsResizedToNnFolder = os.path.join(cropFolder, 'cropsResizedToNn')
+
+# I.3.2 Cache the video
 vs_cache, nFrames, frameWidth, frameHeight = loadVideo(vs, method='list')
 """[TBR]
 vs_cache = []
@@ -193,8 +202,6 @@ while True:
 cv2.destroyAllWindows()
 
 # III. SAVE BBOXES AND EXTRAPOLATED BBOXES TO FILE
-sourceBbPath = ts+"sourceBB.pickle"
-extrapolatedBbPath = ts+"extrapolatedBB.pickle"
 # III.1. Pickle the source BBoxes as a dict
 with open(sourceBbPath, 'wb') as f:
 	heliBBoxSource = dict()
@@ -230,9 +237,9 @@ with open(extrapolatedBbPath, 'rb') as f:
 
 # IV.2. Replay the video with them & save non-skipped crops for NN
 # IV.2.1. Cleanup the crop directory (if it exists)
-pictureFolder = os.path.join(os.path.split(videoPath)[0], ts+'NN_crops')
-nnSizeCropsFolder = os.path.join(pictureFolder, 'nnSizeCrops')
-cropsResizedToNnFolder = os.path.join(pictureFolder, 'cropsResizedToNn')
+if not os.path.isdir(cropFolder):
+	os.mkdir(cropFolder)
+# IV.2.2. nnSizeCropsFolder
 if os.path.isdir(nnSizeCropsFolder):
 	fileList = glob(os.path.join(nnSizeCropsFolder,'*'))
 	#print(os.path.join(nnSizeCropsFolder,'*'))
@@ -242,6 +249,7 @@ if os.path.isdir(nnSizeCropsFolder):
 			os.remove(f)
 else:
 	os.mkdir(nnSizeCropsFolder)
+# IV.2.3. cropsResizedToNnFolder
 if os.path.isdir(cropsResizedToNnFolder):
 	fileList = glob(os.path.join(cropsResizedToNnFolder,'*'))
 	#print(os.path.join(cropsResizedToNnFolder,'*'))

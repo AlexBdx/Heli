@@ -17,6 +17,7 @@ import collections
 import os
 import psutil
 from sklearn.model_selection import ParameterGrid
+import pickle
 
 # Custom made files
 import imageStabilizer
@@ -144,7 +145,7 @@ iterationDict = ParameterGrid(params)
 bbPath = args["bounding_boxes"]
 logFile = os.path.split(bbPath)[1]+".csv"
 iterationStart = manageLog(logFile, params, args["restart"])
-bbHelicopter = importHeliBB(bbPath)
+bbHelicopter = importHeliBB(bbPath) # Creates a dict
 
 #modif = np.zeros((nFrames, 3))
 #timing = np.zeros((nFrames, 4))
