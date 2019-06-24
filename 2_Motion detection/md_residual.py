@@ -72,6 +72,7 @@ def loadVideo(videoStream, method='generator'):
 			vs[i] = videoStream.read()[1]
 	# Appends the frames in a list
 	if method == 'list':
+		vs = []
 		while True:
 			frame = videoStream.read()[1]
 			if frame is not None:
@@ -102,16 +103,19 @@ def manageLog(logFile, params, restart):
 
 def importHeliBB(heliBBfile):
 	# Import the known locations of the helicopter
-	bbHelicopter = []
-	with open(heliBBfile, 'r') as f:
-		r = csv.reader(f)
+	with open(heliBBfile, 'rb') as f:
+		#r = csv.reader(f, delimiter=';')
+		bbHelicopter = pickle.load(f)
+		"""[TBR]
 		for entry in r:
-			bbHelicopter.append(tuple([int(v) for v in entry]))
+			bbHelicopter.append([entry[0], tuple(int(v) for v in entry[1][1:-1].split(','))])
+		"""
 	return bbHelicopter
 
 # construct the argument parser and parse the arguments
 ap = argparse.ArgumentParser()#
-ap.add_argument("-v", "--video", help="path to the video file")
+ap.add_argument("-v", "--video", help="path to the video file", required=True)
+ap.add_argument("-bb", "--bounding_boxes", type=str, help="path to ground truth bounding boxes", required=True)
 ap.add_argument("-r", "--restart", type=int, help="iteration restart")
 args = vars(ap.parse_args())
 
@@ -137,10 +141,10 @@ params = {
 }
 iterationDict = ParameterGrid(params)
 
-
-logFile = "log4.csv"
+bbPath = args["bounding_boxes"]
+logFile = os.path.split(bbPath)[1]+".csv"
 iterationStart = manageLog(logFile, params, args["restart"])
-bbHelicopter = importHeliBB("heliLocations.csv")
+bbHelicopter = importHeliBB(bbPath)
 
 #modif = np.zeros((nFrames, 3))
 #timing = np.zeros((nFrames, 4))
@@ -162,6 +166,11 @@ distanceToHelico = 15 # acceptable distance to actual BBox center
 
 
 print("[INFO] Starting {} iterations".format(len(iterationDict)))
+firstBbox = int(bbHelicopter[0][0])
+lastBbox = int(bbHelicopter[-1][0])
+print("Starting at frame {}".format(firstBbox))
+print("Ending at frame {}".format(lastBbox))
+frameInit = True
 
 for sd in tqdm.tqdm(iterationDict):
 	#-------------------------------------
@@ -180,7 +189,21 @@ for sd in tqdm.tqdm(iterationDict):
 	# ----------------------------
 	# 2. FRAME PROCESSING
 	#-----------------------------
-	for frameCounter, frame in enumerate(vs):
+	for frameCounter in range(nFrames):
+		print(frameCounter)
+		frame = vs.read()[1]
+	# We need to skip all the first frames when the helicopter is not in sight
+	# And stop running the alg when there are no more ground truth BBoxes 
+		if frameCounter == firstBbox and frameInit:
+			print("Offsetting the frame number")
+			frameCounter = 0
+			frameInit = False
+		else:
+			continue
+		if frameCounter == lastBbox+1-firstBbox:
+			pr
+			break
+	# Now we have skipped the first frames for which there are no 
 	#while True:
 		if frameCounter > nFrames-2: # Due to tracker output - preserves frameLocations.csv
 			#time.sleep(10)
@@ -259,7 +282,9 @@ for sd in tqdm.tqdm(iterationDict):
 			largeBox += 1
 			# Check if the corner is within range of the actual corner
 			# That data was obtained by running a CSRT tracker on the helico
-			xHelico, yHelico = bbHelicopter[frameCounter]
+			xHelico, yHelico = bbHelicopter[frameCounter][1][:2] 
+			print(bbHelicopter[frameCounter])
+			print(xHelico, yHelico)
 			if np.sqrt((x-xHelico)**2+(y-yHelico)**2) < distanceToHelico:
 				heliBB += 1
 
@@ -317,6 +342,7 @@ for sd in tqdm.tqdm(iterationDict):
 
 
 	#Impact of stabilization on number of boxes
+	print(nbBoxes)
 	bb=np.array(nbBoxes)
 	bb = bb[1:] # Delete first frame which is not motion controlled
 
