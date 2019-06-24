@@ -11,23 +11,26 @@ import cv2
 #import numpy as np
 import csv
 from psutil import Process
-from os import getpid
+import os
+import copy
 
 def checkRamUse():
-	pid = getpid()
+	pid = os.getpid()
 	py = Process(pid)
 	return py.memory_info()[0]
 
-# construct the argument parser and parse the arguments
+
+# I. Setup
+# I.1. Preparing the arguments
+# Videos: ../0_Database/RPi_import/
 ap = argparse.ArgumentParser()
-ap.add_argument("-v", "--video", type=str,
-	help="path to input video file")
-ap.add_argument("-t", "--tracker", type=str, default="csrt",
-	help="OpenCV object tracker type")
+ap.add_argument("-v", "--video", type=str, help="path to input video file")
+ap.add_argument("-t", "--tracker", type=str, default="csrt", help="OpenCV object tracker type")
+ap.add_argument("-s", "--skip", type=int, default=0, help="Proportion of BBox to save to file")
+ap.add_argument("-n", "--neural_network_size", type=str, default='224x224', help="BBox crop size for NN input")
 args = vars(ap.parse_args())
 
-# initialize a dictionary that maps strings to their corresponding
-# OpenCV object tracker implementations
+# I.2. Initialize a dictionary that maps strings to their corresponding
 OPENCV_OBJECT_TRACKERS = {
 	"csrt": cv2.TrackerCSRT_create
 	#"kcf": cv2.TrackerKCF_create,
@@ -38,12 +41,12 @@ OPENCV_OBJECT_TRACKERS = {
 	#"mosse": cv2.TrackerMOSSE_create
 }
 
-
+# I.3. Cache the video
 print("Caching video...")
-# Cache the video to better manipulate it - will take a ton of RAM
 t0 = time.perf_counter()
 vs_cache = []
-vs = cv2.VideoCapture(args["video"])
+videoPath = args["video"]
+vs = cv2.VideoCapture(videoPath)
 while True:
 	frame = vs.read()[1]
 	if frame is not None:
@@ -53,6 +56,7 @@ while True:
 t1 = time.perf_counter()
 print("Caching done in {:.2f} s\tRAM used: {} Mb".format(t1-t0, checkRamUse()//2**20))
 
+# I.4. Initialize various variables
 index = 0
 frameChange = False
 # Tracking related
@@ -61,8 +65,15 @@ flagTrackerActive = False
 flagSuccess = False
 box = (0, 0, 0, 0)
 heliBBox = []
+skip = args["skip"]
+nnSize = tuple(int(s) for s in args["neural_network_size"].split('x'))
+windowName = "Video Feed"
 
-cv2.imshow("Frame", vs_cache[index])
+
+# II. Process the video
+#frame = vs_cache[index]
+#frame = imutils.resize(frame, width=500)
+cv2.imshow(windowName, vs_cache[index])
 while True:
 	# wait for user's choice
 	key = cv2.waitKey(1) & 0xFF
@@ -84,7 +95,7 @@ while True:
 			box = (0, 0, 0, 0)
 			print("Tracker deactivated!")
 		else: # not elif to let the user move the frame 
-			roi = cv2.selectROI("Frame", vs_cache[index], fromCenter=False,
+			roi = cv2.selectROI(windowName, vs_cache[index], fromCenter=False,
 				showCrosshair=True)
 			tracker.init(vs_cache[index], roi) # Init tracker
 			flagTrackerActive = True
@@ -93,7 +104,7 @@ while True:
 	# Update screen if there was a change
 	if frameChange: # The frame index has changed!
 		# 1. Update the frame
-		frame = vs_cache[index]
+		frame = vs_cache[index].copy() # Don't edit the original cache!
 		(H, W) = frame.shape[:2]
 		info = [("Frame", index)]
 		# 2. Manage the tracker
@@ -115,13 +126,13 @@ while True:
 		print("Showing frame ", index)
 		for (i, (k, v)) in enumerate(info):
 			text = "{}: {}".format(k, v)
-			cv2.putText(frame, text, (10, H - ((i * 20) + 20)),
-				cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-		cv2.imshow("Frame", frame)
+			cv2.putText(frame, text, (10, (i+1) * 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+		cv2.imshow(windowName, frame)
 		# 4. Reset flag
 		frameChange = False # Back to normal
 
-# Dump the BBox to file
+
+# III. Save BBoxes and extrapolated bbox to file
 cv2.destroyAllWindows()
 with open("frameLocations.csv", 'w') as f:
 	out = csv.writer(f, delimiter=';')
@@ -148,3 +159,46 @@ with open("extrapolatedFrameLocations.csv", 'w') as f:
 	else: # There are 0 or 1 frame -> we just write that
 		for entry in heliBBox:
 			out.writerow(entry)
+
+
+# IV. Sanity check: make sure the extrapolation was meaningful
+# IV.1. Import extrapolated bboxes
+with open("extrapolatedFrameLocations.csv", 'r') as f:
+	inputFile = csv.reader(f, delimiter=';')
+	extraBbox = dict()
+	for entry in inputFile:
+		frameNumber = int(entry[0])
+		bboxImport = entry[1][1:-1].split(',')
+		bbox = tuple(int(s) for s in bboxImport)
+		#print(frameNumber, '\t', bbox)
+		extraBbox[frameNumber] = bbox
+
+# IV.2. Replay the video with them & save crops for NN
+cropCounter = 0 # Used to increment picture name
+bboxCounter = 0 # Used for the skip function
+ts = os.path.split(videoPath)[1][:14]
+pictureFolder = os.path.join(os.path.split(videoPath)[0], ts+'NN_crops')
+if not os.path.isdir(pictureFolder):
+	os.mkdir(pictureFolder)
+for index, frame in enumerate(vs_cache):
+	frame = frame.copy()
+	try:
+		(x, y, w, h) = extraBbox[index]
+		xc, yc = x+w//2, y+h//2
+		s = max(w, h)
+		if bboxCounter % (skip+1)==0: # Depends how often you want to save crops
+			image = frame[yc-s//2:yc+s//2, xc-s//2:xc+s//2]
+			image = cv2.resize(image, nnSize) # Resize to NN input size
+			outPath = os.path.join(pictureFolder, ts+str(cropCounter)+'.jpg')
+			cv2.imwrite(outPath, image)
+			cropCounter += 1
+		
+		cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+		bboxCounter += 1
+	except KeyError:
+		pass
+	cv2.imshow(windowName, frame)
+	key = cv2.waitKey(1) & 0xFF
+	if key == ord('q'):
+		break
+
