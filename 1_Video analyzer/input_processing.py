@@ -16,7 +16,7 @@ import copy
 import pickle
 from glob import glob
 
-# O. DECLARATIONS
+# 0. DECLARATIONS
 def checkRamUse():
 	# V190624
 	pid = os.getpid()
