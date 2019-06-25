@@ -16,6 +16,7 @@ import copy
 import pickle
 from glob import glob
 
+
 # 0. DECLARATIONS
 def checkRamUse():
 	# V190624
@@ -23,28 +24,36 @@ def checkRamUse():
 	py = Process(pid)
 	return py.memory_info()[0]
 
-def nnSizeCrop(image, nnSize, bboxCenter):
-	# V190624
-	# Calculate the required black padding around the image to make it nnSize[0]xnnSize[1]
-	# image.shape can only be smaller or equal to nnSize as a frame slice of nnSize
+def nnSizeCrop(image, windowSize, bboxCenter):
+	# V190625
+	# Calculate the required black padding around the image to make it windowSize[0]windowSize[1]
+	# image.shape can only be smaller or equal to windowSize as a frame slice of windowSize
 	#print("Initial shape: ", image.shape)
 	xc, yc = bboxCenter
-	top = nnSize[1]//2-yc if yc-nnSize[1]//2<0 else 0
-	bottom = yc+nnSize[1]//2-frameHeight if yc+nnSize[1]//2>frameHeight else 0
-	left = nnSize[0]//2-xc if xc-nnSize[0]//2<0 else 0
-	right = xc+nnSize[0]//2-frameWidth if xc+nnSize[0]//2>frameWidth else 0
-	#print(top, bottom, left, right)
-	image = cv2.copyMakeBorder(image, top, bottom, left, right, borderType=cv2.BORDER_CONSTANT, value=[0,0,0])
+	# Calculate how much padding is needed
+	top = windowSize[1]//2-yc if yc-windowSize[1]//2<0 else 0
+	bottom = yc+windowSize[1]//2-frameHeight if yc+windowSize[1]//2>frameHeight else 0
+	left = windowSize[0]//2-xc if xc-windowSize[0]//2<0 else 0
+	right = xc+windowSize[0]//2-frameWidth if xc+windowSize[0]//2>frameWidth else 0
+	if top or bottom or left or right:
+		# Add a black padding where necessary
+		image = cv2.copyMakeBorder(image, top, bottom, left, right, borderType=cv2.BORDER_CONSTANT, value=[0,0,0])
 	# DEBUG
 	# 1. There shall be no negative param
-	assert top >= 0
-	assert bottom >= 0
-	assert left >= 0
-	assert right >= 0
-	# 2. The final shape shall be nnSize + 3 channels
-	assert image.shape == (nnSize[0], nnSize[1], 3)
+	try:
+		assert top >= 0
+		assert bottom >= 0
+		assert left >= 0
+		assert right >= 0
+		# 2. The final shape shall be windowSize + 3 channels
+		assert image.shape == (windowSize[0], windowSize[1], 3)
+	except AssertionError:
+		print("TBLR: ", top, bottom, left, right)
+		print("Output image shape: ", image.shape, (windowSize[0], windowSize[1], 3))
 
 	return image
+
+
 
 def loadVideo(videoStream, method='generator'):
 	# V190624
@@ -78,7 +87,7 @@ def loadVideo(videoStream, method='generator'):
 # I.1. Preparing the arguments
 # Videos: ../0_Database/RPi_import/
 ap = argparse.ArgumentParser()
-ap.add_argument("-v", "--video", type=str, help="path to input video file")
+ap.add_argument("-v", "--video", type=str, help="path to input video file", required=True)
 ap.add_argument("-t", "--tracker", type=str, default="csrt", help="OpenCV object tracker type")
 ap.add_argument("-s", "--skip", type=int, default=0, help="Proportion of BBox to save to file")
 ap.add_argument("-n", "--neural_network_size", type=str, default='224x224', help="BBox crop size for NN input")
@@ -134,7 +143,17 @@ flagSuccess = False
 box = (0, 0, 0, 0)
 heliBBox = []
 skip = args["skip"]
+# nnSize needs to be a pair of even number. If not, the next larger even number is used.
 nnSize = tuple(int(s) for s in args["neural_network_size"].split('x')) # w, h coordinates
+try:
+	assert nnSize[0]%2 == 0
+	assert nnSize[1]%2 == 0
+except AssertionError:
+	# Make nnSize the nearest larger even number
+	nnSize_0 = nnSize[0] if nnSize[0]%2 == 0 else nnSize[0]+1
+	nnSize_1 = nnSize[1] if nnSize[1]%2 == 0 else nnSize[1]+1
+	nnSize = (nnSize_0, nnSize_1)
+	print("neural_network_size needs to be a pair of even numbers. Input was adjusted to nnSize = ({}, {})".format(*nnSize))
 windowName = "Video Feed"
 
 
@@ -269,15 +288,23 @@ for index, frame in enumerate(vs_cache):
 	try:
 		(x, y, w, h) = heliBBoxExtrapolated[index]
 		xc, yc = x+w//2, y+h//2
-		s = max(w, h)
+		# Take the max but make it an even number (odd numbers are a mess with //2)
+		s = max(w, h) if max(w, h)%2==0 else max(w, h)+1
 		if bboxCounter % (skip+1)==0:
 			# First option: nnSizeCrops - nnSize crop
-			image = frame[yc-nnSize[1]//2:yc+nnSize[1]//2, xc-nnSize[0]//2:xc+nnSize[0]//2]
+			# Limit the size of the crop
+			xStart, xEnd = max(0, xc-nnSize[0]//2), min(frameWidth, xc+nnSize[0]//2)
+			yStart, yEnd = max(0, yc-nnSize[1]//2), min(frameHeight, yc+nnSize[1]//2)
+			image = frame[yStart:yEnd, xStart:xEnd]
 			image = nnSizeCrop(image, nnSize, (xc, yc)) # Forces it to nnSize[0]xnnSize[1]
 			outPath = os.path.join(nnSizeCropsFolder, ts+str(cropCounter)+'.jpg')
 			cv2.imwrite(outPath, image)
 			# Second option: (square) cropsResizedToNn - bbox crop resized to nnSize
-			image = frame[yc-s//2:yc+s//2, xc-s//2:xc+s//2]
+			xStart, xEnd = max(0, xc-s//2), min(frameWidth, xc+s//2)
+			yStart, yEnd = max(0, yc-s//2), min(frameHeight, yc+s//2)
+			image = frame[yStart:yEnd, xStart:xEnd]
+			image = nnSizeCrop(image, (s, s), (xc, yc)) # pad to (s, s)
+			# Then only we resize to nnSize
 			image = cv2.resize(image, nnSize) # Resize to NN input size
 			outPath = os.path.join(cropsResizedToNnFolder, ts+str(cropCounter)+'.jpg')
 			cv2.imwrite(outPath, image)

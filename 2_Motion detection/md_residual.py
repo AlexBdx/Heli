@@ -18,6 +18,7 @@ import os
 import psutil
 from sklearn.model_selection import ParameterGrid
 import pickle
+import copy
 
 # Custom made files
 import imageStabilizer
@@ -50,7 +51,7 @@ def showFeed(s, threshFeed, deltaFrame, currentFrame):
 	if s[2] == '1':
 		cv2.imshow("Security Feed", currentFrame)
 
-def importStream(videoStreamPath=None, verbose=True):
+def importStream(videoStreamPath=None, verbose=False):
 	# if the video argument is None, then we are reading from webcam
 	if videoStreamPath is None:
 		videoStream = cv2.VideoCapture("/dev/video0")
@@ -92,12 +93,12 @@ def cacheVideo(videoStream, method):
 	print("[INFO] Cached {} frames with shape x-{} y-{}".format(nFrames, frameWidth, frameHeight))
 	return vs_cache
 
-def manageLog(logFilePath, params, restart):
+def manageLog(logFilePath, params, restart, verbose=False):
 	# Start from scratch
 	if restart is None:
 		with open(logFilePath, 'w') as f:
 			w = csv.writer(f)
-			newHeader = list(params.keys())+["realFps", "avNbBoxes", "avNbFilteredBoxes", "avNbHeliBox", "percentHeliTotalFiltered", "percentFrameWithHeli"]
+			newHeader = list(params.keys())+["realFps", "avNbBoxes", "avNbFilteredBoxes", "avNbHeliBox", "percentHeliTotalFiltered", "percentFrameWithHeli", "f1_score"]
 			w.writerow(newHeader)
 			print("Log header is now ", newHeader)
 		iterationStart = 0
@@ -105,7 +106,8 @@ def manageLog(logFilePath, params, restart):
 	else:
 		iterationStart = args["restart"]
 	
-	print("Starting at iteration {}".format(iterationStart))
+	if verbose:
+		print("Starting at iteration {}".format(iterationStart))
 	return iterationStart
 
 def importHeliBB(heliBBfile):
@@ -137,15 +139,16 @@ videoStreamPath = args["video"]
 #--------------------------
 
 params = {
-'gaussWindow': range(1, 5, 2), \
-'mgp': range(125, 126, 25), \
+'gaussWindow': range(3, 6, 2), \
+'mgp': range(25, 26, 25), \
 'minArea': [x**2 for x in range(1, 2)],\
-'residualConnections': range(3, 6),\
+'residualConnections': range(1, 4),\
 'winSize': range(3, 4, 2),\
-'maxLevel': range(7, 8, 3),\
-'threshold': range(20, 36, 5),\
+'maxLevel': range(5, 6, 3),\
+'threshold': range(25, 46, 10),\
 'diffMethod': range(0, 1, 1),\
-'dilationIterations': range(4, 7, 1)
+'dilationIterations': range(4, 11, 2),\
+'skipFrame': range(0, 1, 1)
 }
 iterationDict = ParameterGrid(params)
 
@@ -153,6 +156,7 @@ bbPath = args["bounding_boxes"]
 # Need to change the logFilePath name
 logFileName = os.path.split(bbPath)[1][:14]+"Detection_paramSearch.csv" # Replace the (pickle) extension by a csv
 logFilePath = os.path.join(os.path.split(bbPath)[0], logFileName)
+print(logFilePath)
 iterationStart = manageLog(logFilePath, params, args["restart"])
 bbHelicopter = importHeliBB(bbPath) # Creates a dict
 
@@ -169,22 +173,24 @@ bbHelicopter = importHeliBB(bbPath) # Creates a dict
 #minArea = 10
 
 #--------------
-# STATIC PARAMS
+# STATIC HYPERPARAMS
 #--------------
 displayFeed = '000'
 # bboxError is max error ratio to count a bbox as matching ground truth
 # This applies to all axis (xc, yc, w, h)
-bboxError = 0.25
+bboxError = 0.5
 red = (0, 0, 255)
 green = (0, 255, 0)
 blue = (255, 0, 0)
+flagPhaseCorrelation = False # This is too slow (>3x slower than mgp)
+flagOpticalFlow = False # A bit better, but still a lot
+verbose = False
 
 
 print("[INFO] Starting {} iterations".format(len(iterationDict)))
 firstBbox = min(bbHelicopter.keys())
 lastBbox = max(bbHelicopter.keys())
-print("Starting at frame {}".format(firstBbox))
-print("Ending at frame {}".format(lastBbox))
+print("[INFO] Using bbox frames {} to {}".format(firstBbox, lastBbox))
 
 vs2 = cacheVideo(importStream(videoStreamPath)[0], 'list')
 for sd in tqdm.tqdm(iterationDict):
@@ -202,6 +208,7 @@ for sd in tqdm.tqdm(iterationDict):
 	
 	iS = imageStabilizer.imageStabilizer(frameWidth, frameHeight, maxGoodPoints=sd['mgp'], maxLevel=sd['maxLevel'], winSize=sd['winSize'])
 	padding = 10 # px
+	skipFrameCounter = sd['skipFrame'] # Go through the if statement the first time
 	
 	fps = FPS().start()
 	# ----------------------------
@@ -209,18 +216,25 @@ for sd in tqdm.tqdm(iterationDict):
 	#-----------------------------
 	
 	for frameNumber in range(nFrames):
+		
 		t0 = time.perf_counter()
 		#frame = vs.read()[1] # No cache
-		frame = vs2[frameNumber]
+		frame = vs2[frameNumber].copy() # Prevents editing the original frames!
 		t1 = time.perf_counter()
 		# Skip all the frames that do not have a Bbox
 		if frameNumber < firstBbox:
 			continue
 		if frameNumber > min(nFrames-2, lastBbox):
-			print("Done with this sim. FirstBox {}, lastBox {}, frameNumber {}".format(firstBbox, lastBbox, frameNumber))
+			#print("Done with this sim. FirstBox {}, lastBox {}, frameNumber {}".format(firstBbox, lastBbox, frameNumber))
 			break
-
-	#while True:
+		
+		# 0. Skip frames - subsampling of FPS
+		if skipFrameCounter < sd['skipFrame']:
+			skipFrameCounter += 1
+			continue
+		else:
+			skipFrameCounter = 0
+		
 		# Create a 0 based index that tracks how many bboxes we have gone through
 		bboxFrameNumber = frameNumber - firstBbox # Starts at 0, automatically incremented
 		# Load the previous frames in memory for residual connections
@@ -238,12 +252,16 @@ for sd in tqdm.tqdm(iterationDict):
 		# II. Convert to gray scale
 		t2 = time.perf_counter()
 		currentGrayFrame = cv2.cvtColor(currentFrame, cv2.COLOR_BGR2GRAY)
-		t3 = time.perf_counter()
+		
 
 		# III. Stabilize the image in the gray space with latest gray frame, fwd to color space
-		# We use the previous frame
-		#m, currentGrayFrame = iS.stabilizeFrame(previousGrayFrame[-1], currentGrayFrame)
-		#currentFrame = cv2.warpAffine(currentFrame, m, (frameWidth, frameHeight))
+		# Two methods (dont' chain them): phase correlation & optical flow
+		t3 = time.perf_counter()
+		if flagPhaseCorrelation:
+			retval, response = cv2.phaseCorrelate(np.float32(previousGrayFrame[-1][100:1000, 100:1000])/255.0, np.float32(currentGrayFrame[100:1000, 50:950])/255.0)
+		if flagOpticalFlow:
+			m, currentGrayFrame = iS.stabilizeFrame(previousGrayFrame[-1], currentGrayFrame)
+			currentFrame = cv2.warpAffine(currentFrame, m, (frameWidth, frameHeight))
 		t4 = time.perf_counter()
 		#currentFrame = currentFrame[int(cropPerc*frameHeight):int((1-cropPerc)*frameHeight), int(cropPerc*frameWidth):int((1-cropPerc)*frameWidth)]
 		#modif[bboxFrameNumber-1] = iS.extractMatrix(m)
@@ -283,6 +301,7 @@ for sd in tqdm.tqdm(iterationDict):
 		heliBB = 0
 
 		# VII. Process the BB and classify them
+		xGT, yGT, wGT, hGT = bbHelicopter[frameNumber] # Ground Truth data
 		for c in cnts:
 			# A. Filter out useless BBs
 			# 1. if the contour is too small, ignore it
@@ -306,7 +325,7 @@ for sd in tqdm.tqdm(iterationDict):
 			largeBox += 1
 			# Check if the corner is within range of the actual corner
 			# That data was obtained by running a CSRT tracker on the helico
-			xGT, yGT, wGT, hGT = bbHelicopter[frameNumber] 
+			
 			
 			# Is this bbox close enough to the ground truth bbox? Rectangular window
 			if abs(x-xGT) < bboxError*wGT and\
@@ -324,15 +343,15 @@ for sd in tqdm.tqdm(iterationDict):
 				pass
 
 			# C. Generate a square BB
-			if displayFeed == '001':
-				#cv2.rectangle(currentFrame, (x, y), (x + w, y + h), green, 2)
-				cv2.rectangle(currentFrame, (xGT, yGT), (xGT + wGT, yGT + hGT), red, 2) # Display ground truth in red
-				#cv2.rectangle(currentFrame, (x, y), (x + s, y + s), green, 2)
+			#cv2.rectangle(currentFrame, (x, y), (x + s, y + s), green, 2)
+			#cv2.rectangle(currentFrame, (x, y), (x + w, y + h), green, 2)
+		if displayFeed == '001':
+			cv2.rectangle(currentFrame, (xGT, yGT), (xGT + wGT, yGT + hGT), red, 2) # Display ground truth in red
 		t9 = time.perf_counter()
 
 		# VIII. draw the text and timestamp on the currentFrame
 		if displayFeed != '000':
-			if bboxFrameNumber%10 == 0:
+			if bboxFrameNumber%2 == 0:
 				cv2.putText(currentFrame, "BBoxes: {} found, {} heliBox".format(len(cnts), heliBB), (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, red, 2)
 				#cv2.putText(currentFrame, datetime.datetime.now().strftime("%A %d %B %Y %I:%M:%S%p"), (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, red, 1) # Shows current date/time
 
@@ -354,14 +373,16 @@ for sd in tqdm.tqdm(iterationDict):
 
 		fps.update()
 		t10 = time.perf_counter()
-		newTiming = {'Read frame': t1-t0, 'Convert to grayscale': t3-t2, 'Stabilize': t4-t3, 'Double Gauss': t5-t4, 'Abs diff': t6-t5, 'Thresholding': t7-t6, 'Dilation': t8-t7, 'Count boxes': t9-t8, 'Finalize':t10-t9}
-		for key in timing.keys():
-			timing[key] += newTiming[key]
+		if verbose:
+			newTiming = {'Read frame': t1-t0, 'Convert to grayscale': t3-t2, 'Stabilize': t4-t3, 'Double Gauss': t5-t4, 'Abs diff': t6-t5, 'Thresholding': t7-t6, 'Dilation': t8-t7, 'Count boxes': t9-t8, 'Finalize':t10-t9}
+			for key in timing.keys():
+				timing[key] += newTiming[key]
 
 	# XI. Display results
 	fps.stop()
 	vs.release() # Done with going through this simulation, get ready for another pass
-	print(timing)
+	if verbose:
+		print("Code profiling for various operations (in s):\n", timing)
 	cv2.destroyAllWindows()
 
 	elapsedTime = fps.elapsed()
@@ -391,6 +412,7 @@ for sd in tqdm.tqdm(iterationDict):
 	percentHeliTotalFiltered = avNbHeliBox/avNbFilteredBoxes # Ratio of helibox/nb of boxes
 	# Recall: how many frames had a positive heliBox? There should be one in each.
 	percentFrameWithHeli = np.sum(bb[:, 3])/bboxFrameNumber # Proportion of frames with heli
+	f1_score = 1/(1/percentHeliTotalFiltered+1/percentFrameWithHeli)
 
 	#-----------------
 	# SANITY CHECKS
@@ -418,7 +440,7 @@ for sd in tqdm.tqdm(iterationDict):
 	"""
 
 	# Output results - parameters+KPIs
-	KPIs = [realFps, avNbBoxes, avNbFilteredBoxes, avNbHeliBox, percentHeliTotalFiltered, percentFrameWithHeli]
+	KPIs = [realFps, avNbBoxes, avNbFilteredBoxes, avNbHeliBox, percentHeliTotalFiltered, percentFrameWithHeli, f1_score]
 	# Warning: they are both int array of the same length so they can be added!
 	
 	simOutput = [sd[k] for k in params.keys()] + list(KPIs)
@@ -427,5 +449,26 @@ for sd in tqdm.tqdm(iterationDict):
 		w = csv.writer(f)
 		w.writerow(simOutput)
 
-print("Done!")
+# XII. Wrap-up the search & output some logs for quick review
+# XII.1. Find the best params based on the f1_score metric
+with open(logFilePath, 'r') as f:
+	r = csv.reader(f)
+	next(r) # Skip header
+	highestF1Score = 0
+	for entry in r:# Keep the score always last item
+		if float(entry[-1]) > highestF1Score:
+			highestF1Score = float(entry[-1])
+			bestParams = entry
 
+# XII.2. Create a new log file with the best params
+_ = manageLog(logFilePath[:-4]+'_bestParams.csv', params, None)
+with open(logFilePath[:-4]+'_bestParams.csv', 'a') as f:
+	w = csv.writer(f)
+	w.writerow(bestParams)
+
+# XII.3. Pickle the params dict
+with open(logFilePath[:-4]+'_paramSpace.pickle', 'wb') as f:
+	pickle.dump(params, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+# XII.4. Final message!!
+print("Done. Highest f1_score: ", highestF1Score)
