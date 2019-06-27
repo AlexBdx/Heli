@@ -15,6 +15,7 @@ import os
 import copy
 import pickle
 from glob import glob
+import numpy as np
 
 
 # 0. DECLARATIONS
@@ -53,7 +54,30 @@ def nnSizeCrop(image, windowSize, bboxCenter):
 
 	return image
 
-
+def cropNegative(frame, nnSize, bboxCenter):
+	# This function will extract a negative - an image that does not contain the object in the ROI
+	# nnSize is width x height
+	xc, yc = bboxCenter
+	frameHeight, frameWidth, _ = frame.shape
+	try:
+		assert frameWidth > 2*nnSize[0] and frameHeight > 2*nnSize[1]
+	except AssertionError:
+		print("[cropNegative] The input image is to small to crop a negative")
+		return None
+	xn = np.random.randint(frameWidth)
+	yn = np.random.randint(frameHeight)
+	while (xc-nnSize[0] < xn < xc+nnSize[0] and yc-nnSize[1] < yn < yc+nnSize[1]) or xn > frameWidth - nnSize[0] or yn > frameHeight - nnSize[1]:
+		""" [TBR]
+		print(xn, yn)
+		print(xc-nnSize[0] < xn < xc+nnSize[0], xn, xc)
+		print(yc-nnSize[1] < yn < yc+nnSize[1], yn, yc)
+		print(xn > frameWidth - nnSize[0], frameWidth - nnSize[0], xn)
+		print(yn > frameHeight - nnSize[1], frameHeight - nnSize[1], yn)
+		print("\n")
+		"""
+		xn = np.random.randint(frameWidth)
+		yn = np.random.randint(frameHeight)
+	return frame[yn:yn+nnSize[1], xn:xn+nnSize[0]]
 
 def loadVideo(videoStream, method='generator'):
 	# V190624
@@ -118,6 +142,7 @@ extrapolatedBbPath = os.path.join(videoFolder, ts+"extrapolatedBB.pickle")
 cropFolder = os.path.join(os.path.split(videoPath)[0], ts+'NN_crops')
 nnSizeCropsFolder = os.path.join(cropFolder, 'nnSizeCrops')
 cropsResizedToNnFolder = os.path.join(cropFolder, 'cropsResizedToNn')
+negatives = os.path.join(cropFolder, 'negatives')
 
 # I.3.2 Cache the video
 vs_cache, nFrames, frameWidth, frameHeight = loadVideo(vs, method='list')
@@ -278,6 +303,16 @@ if os.path.isdir(cropsResizedToNnFolder):
 			os.remove(f)
 else:
 	os.mkdir(cropsResizedToNnFolder)
+# IV.2.4. negatives
+if os.path.isdir(negatives):
+	fileList = glob(os.path.join(negatives,'*'))
+	#print(os.path.join(negatives,'*'))
+	#print(fileList)
+	if len(fileList)>0:
+		for f in fileList:
+			os.remove(f)
+else:
+	os.mkdir(negatives)
 
 # IV.2.2 Replay the video and save the crops to file
 cropCounter = 0 # Used to increment picture name
@@ -291,7 +326,7 @@ for index, frame in enumerate(vs_cache):
 		# Take the max but make it an even number (odd numbers are a mess with //2)
 		s = max(w, h) if max(w, h)%2==0 else max(w, h)+1
 		if bboxCounter % (skip+1)==0:
-			# First option: nnSizeCrops - nnSize crop
+			# IV.2.2.1 First option: nnSizeCrops - nnSize crop
 			# Limit the size of the crop
 			xStart, xEnd = max(0, xc-nnSize[0]//2), min(frameWidth, xc+nnSize[0]//2)
 			yStart, yEnd = max(0, yc-nnSize[1]//2), min(frameHeight, yc+nnSize[1]//2)
@@ -299,7 +334,7 @@ for index, frame in enumerate(vs_cache):
 			image = nnSizeCrop(image, nnSize, (xc, yc)) # Forces it to nnSize[0]xnnSize[1]
 			outPath = os.path.join(nnSizeCropsFolder, ts+str(cropCounter)+'.jpg')
 			cv2.imwrite(outPath, image)
-			# Second option: (square) cropsResizedToNn - bbox crop resized to nnSize
+			# IV.2.2.2 Second option: (square) cropsResizedToNn - bbox crop resized to nnSize
 			xStart, xEnd = max(0, xc-s//2), min(frameWidth, xc+s//2)
 			yStart, yEnd = max(0, yc-s//2), min(frameHeight, yc+s//2)
 			image = frame[yStart:yEnd, xStart:xEnd]
@@ -307,6 +342,10 @@ for index, frame in enumerate(vs_cache):
 			# Then only we resize to nnSize
 			image = cv2.resize(image, nnSize) # Resize to NN input size
 			outPath = os.path.join(cropsResizedToNnFolder, ts+str(cropCounter)+'.jpg')
+			cv2.imwrite(outPath, image)
+			# IV.2.2.3 Create a negative image - no helico
+			image = cropNegative(frame, nnSize, (xc, yc))
+			outPath = os.path.join(negatives, ts+str(cropCounter)+'.jpg')
 			cv2.imwrite(outPath, image)
 			# Increment crop counter
 			cropCounter += 1
