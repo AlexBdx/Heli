@@ -132,22 +132,21 @@ args = vars(ap.parse_args())
 # Import the file/stream
 #------------------
 videoStreamPath = args["video"]
-
+videoStream, nFrames, frameWidth, frameHeight = importStream(videoStreamPath)
 
 #--------------------------
 # ITERATION TABLE
 #--------------------------
 
 params = {
-'gaussWindow': range(3, 6, 2), \
-'mgp': range(25, 26, 25), \
-'minArea': [x**2 for x in range(1, 2)],\
-'residualConnections': range(1, 4),\
-'winSize': range(3, 4, 2),\
-'maxLevel': range(5, 6, 3),\
-'threshold': range(25, 46, 10),\
-'diffMethod': range(0, 1, 1),\
-'dilationIterations': range(4, 11, 2),\
+'gaussWindow': range(3, 6, 2),
+'mgp': range(25, 26, 25),
+'residualConnections': range(1, 4),
+'winSize': range(3, 4, 2),
+'maxLevel': range(5, 6, 3),
+'threshold': range(25, 46, 10),
+'diffMethod': range(0, 1, 1),
+'dilationIterations': range(4, 11, 2),
 'skipFrame': range(0, 1, 1)
 }
 iterationDict = ParameterGrid(params)
@@ -182,9 +181,22 @@ bboxError = 0.5
 red = (0, 0, 255)
 green = (0, 255, 0)
 blue = (255, 0, 0)
-flagPhaseCorrelation = False # This is too slow (>3x slower than mgp)
+flagPhaseCorrelation = True # This is too slow (>3x slower than mgp)
 flagOpticalFlow = False # A bit better, but still a lot
 verbose = False
+
+# Min/Max area for the helicopter detection.
+# Min is difficult: it could be as small as a speck in the distance
+# Max is easier: you know how close it can possibly get (the helipad)
+minArea = 1
+if (
+(frameWidth == 1920 and frameHeight == 1080) or
+(frameWidth == 3280 and frameHeight == 2464)):
+	binning = 1
+else:
+	binning = 2*2
+	print("[WARNING] Input resolution unusual. Camera sensor understood to be working with a 2x2 binning.")
+maxArea = 200*200/binning
 
 
 print("[INFO] Starting {} iterations".format(len(iterationDict)))
@@ -192,7 +204,7 @@ firstBbox = min(bbHelicopter.keys())
 lastBbox = max(bbHelicopter.keys())
 print("[INFO] Using bbox frames {} to {}".format(firstBbox, lastBbox))
 
-vs2 = cacheVideo(importStream(videoStreamPath)[0], 'list')
+vs2 = cacheVideo(videoStream, 'list')
 for sd in tqdm.tqdm(iterationDict):
 	#-------------------------------------
 	# 1. RESET THE SIM DEPENDENT VARIABLES
@@ -258,7 +270,29 @@ for sd in tqdm.tqdm(iterationDict):
 		# Two methods (dont' chain them): phase correlation & optical flow
 		t3 = time.perf_counter()
 		if flagPhaseCorrelation:
-			retval, response = cv2.phaseCorrelate(np.float32(previousGrayFrame[-1][100:1000, 100:1000])/255.0, np.float32(currentGrayFrame[100:1000, 50:950])/255.0)
+			"""[TBR/Learning XP] Phase correlation is linearly faster as the area 
+			to process is reduced, which is nice. However, if the expected translation is small
+			(like ~ 1px) the results predictions can vary widely as the crop size is reduced.
+			If the motion gets larger (even just 10 px), the results between the small and large crop match very accurately!
+			plt.figure()
+			plt.imshow(crop)
+			plt.show()
+			
+			lCrop = 1000 # Large crop
+			motion = 10 # controlled displacement
+			for sCrop in range(100, 1001, 100):
+				#sCrop = 200
+				
+				t31 = time.perf_counter()
+				retvalSmall, response = cv2.phaseCorrelate(np.float32(currentGrayFrame[:sCrop, :sCrop])/255.0, np.float32(currentGrayFrame[motion:sCrop+motion, motion:sCrop+motion])/255.0)
+				t32 = time.perf_counter()
+				retvalLarge, response = cv2.phaseCorrelate(np.float32(currentGrayFrame[:lCrop, :lCrop])/255.0, np.float32(currentGrayFrame[motion:lCrop+motion, motion:lCrop+motion])/255.0)
+				t33 = time.perf_counter()
+				print("Full image is {} bigger and takes {} more time".format((lCrop/sCrop)**2, (t33-t32)/(t32-t31)))
+				print("xs {:.3f} xl {:.3f} Rx={:.3f} ys {:.3f} yl {:.3f} Ry={:.3f}".format(retvalSmall[0], retvalLarge[0], retvalSmall[0]/retvalLarge[0], retvalSmall[1], retvalLarge[1], retvalSmall[1]/retvalLarge[1]))
+		assert 1==0
+		"""
+			pass
 		if flagOpticalFlow:
 			m, currentGrayFrame = iS.stabilizeFrame(previousGrayFrame[-1], currentGrayFrame)
 			currentFrame = cv2.warpAffine(currentFrame, m, (frameWidth, frameHeight))
@@ -304,8 +338,10 @@ for sd in tqdm.tqdm(iterationDict):
 		xGT, yGT, wGT, hGT = bbHelicopter[frameNumber] # Ground Truth data
 		for c in cnts:
 			# A. Filter out useless BBs
-			# 1. if the contour is too small, ignore it
-			if cv2.contourArea(c) < sd['minArea']:
+			# 1. if the contour is too small or too large, ignore it
+			if cv2.contourArea(c) < minArea:
+				continue
+			if cv2.contourArea(c) > maxArea:
 				continue
 			# compute the bounding box for the contour, draw it on the currentFrame,
 			# and update the text
