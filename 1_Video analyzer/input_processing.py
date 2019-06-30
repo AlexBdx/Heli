@@ -19,27 +19,33 @@ import numpy as np
 
 
 # 0. DECLARATIONS
-def checkRamUse():
-    # V190624
+def check_ram_use():
+    """
+    Check and display the current RAM used by the script.
+    :return: void
+    """
     pid = os.getpid()
-    py = Process(pid)
-    return py.memory_info()[0]
+    py = psutil.Process(pid)
+    memory_use = py.memory_info()[0]
+    print('RAM use: ', memory_use)
 
 
-def nnSizeCrop(image, wSize, bboxCenter):
-    # V190625
-    # wSize : windowSize
-    # Calculate black padding around the image to make it windowSize
-    # image.shape can only be smaller or equal to wSize as a frame slice
-    # print("Initial shape: ", image.shape)
-    xc, yc = bboxCenter
-    # Calculate how much padding is needed
-    top = wSize[1]//2-yc if yc-wSize[1]//2 < 0 else 0
-    bottom = yc+wSize[1]//2 - frameHeight if yc+wSize[1]//2 > frameHeight else 0
-    left = wSize[0]//2-xc if xc-wSize[0]//2 < 0 else 0
-    right = xc+wSize[0]//2-frameWidth if xc+wSize[0]//2 > frameWidth else 0
+def nn_size_crop(image, window_size, bbox_center):
+    """
+    Crop an image with a set window. Handle crops near the edge of the frame with black PADDING.
+    :param image: input image
+    :param window_size: size of the cropping window
+    :param bbox_center: center of the bb
+    :return: window_size crop of image centeRED around bbox_center, potentiall black padded
+    """
+    xc, yc = bbox_center
+    # Calculate how much PADDING is needed
+    top = window_size[1]//2 - yc if yc - window_size[1]//2 < 0 else 0
+    bottom = yc + window_size[1]//2 - FRAME_HEIGHT if yc + window_size[1]//2 > FRAME_HEIGHT else 0
+    left = window_size[0]//2 - xc if xc - window_size[0]//2 < 0 else 0
+    right = xc + window_size[0]//2 - FRAME_WIDTH if xc + window_size[0]//2 > FRAME_WIDTH else 0
     if top or bottom or left or right:
-        # Add a black padding where necessary
+        # Add a black PADDING where necessary
         image = cv2.copyMakeBorder(image, top, bottom, left, right, borderType=cv2.BORDER_CONSTANT, value=[0, 0, 0])
     # DEBUG
     # 1. There shall be no negative param
@@ -48,81 +54,87 @@ def nnSizeCrop(image, wSize, bboxCenter):
         assert bottom >= 0
         assert left >= 0
         assert right >= 0
-        # 2. The final shape shall be wSize + 3 channels
-        assert image.shape == (wSize[0], wSize[1], 3)
+        # 2. The final shape shall be window_size + 3 channels
+        assert image.shape == (window_size[0], window_size[1], 3)
     except AssertionError:
         print("TBLR: ", top, bottom, left, right)
-        print("Output image shape: ", image.shape, (wSize[0], wSize[1], 3))
+        print("Output image shape: ", image.shape, (window_size[0], window_size[1], 3))
 
     return image
 
 
-def cropNegative(frame, nnSize, bboxCenter):
-    # Returns an image not in the ROI
-    # nnSize is width x height
-    xc, yc = bboxCenter
-    frameHeight, frameWidth, _ = frame.shape
+def crop_negative(frame, nn_size, bbox_center):
+    """
+    Randomly crops an image with a nn_size window. The resulting crop has no intersection with the bb formed by nn_size and bbox_center.
+    :param frame: input image
+    :param nn_size: size of the cropping window
+    :param bbox_center: center of the bb
+    :return: image crop
+    """
+    # nn_size is width x height
+    xc, yc = bbox_center
+    FRAME_HEIGHT, FRAME_WIDTH, _ = frame.shape
     try:
-        assert frameWidth > 2*nnSize[0] and frameHeight > 2*nnSize[1]
+        assert FRAME_WIDTH > 2*nn_size[0] and FRAME_HEIGHT > 2*nn_size[1]
     except AssertionError:
-        print("[cropNegative] The input image is to small to crop a negative")
+        print("[crop_negative] The input image is to small to crop a negative")
         return None
-    xn = np.random.randint(frameWidth)
-    yn = np.random.randint(frameHeight)
+    xn = np.random.randint(FRAME_WIDTH)
+    yn = np.random.randint(FRAME_HEIGHT)
     while (
-            (xc-nnSize[0] < xn < xc+nnSize[0] and yc-nnSize[1] < yn < yc+nnSize[1])
-            or xn > frameWidth - nnSize[0]
-            or yn > frameHeight - nnSize[1]
+            (xc-nn_size[0] < xn < xc+nn_size[0] and yc-nn_size[1] < yn < yc+nn_size[1])
+            or xn > FRAME_WIDTH - nn_size[0]
+            or yn > FRAME_HEIGHT - nn_size[1]
             ):
         """ [TBR]
         print(xn, yn)
-        print(xc-nnSize[0] < xn < xc+nnSize[0], xn, xc)
-        print(yc-nnSize[1] < yn < yc+nnSize[1], yn, yc)
-        print(xn > frameWidth - nnSize[0], frameWidth - nnSize[0], xn)
-        print(yn > frameHeight - nnSize[1], frameHeight - nnSize[1], yn)
+        print(xc-nn_size[0] < xn < xc+nn_size[0], xn, xc)
+        print(yc-nn_size[1] < yn < yc+nn_size[1], yn, yc)
+        print(xn > FRAME_WIDTH - nn_size[0], FRAME_WIDTH - nn_size[0], xn)
+        print(yn > FRAME_HEIGHT - nn_size[1], FRAME_HEIGHT - nn_size[1], yn)
         print("\n")
         """
-        xn = np.random.randint(frameWidth)
-        yn = np.random.randint(frameHeight)
-    return frame[yn:yn+nnSize[1], xn:xn+nnSize[0]]
+        xn = np.random.randint(FRAME_WIDTH)
+        yn = np.random.randint(FRAME_HEIGHT)
+    return frame[yn:yn+nn_size[1], xn:xn+nn_size[0]]
 
 
-def loadVideo(videoStream, method='generator'):
+def load_video(video_stream, method='generator'):
     # V190624
-    # Get frame count
-    nFrames = int(videoStream.get(cv2.CAP_PROP_FRAME_COUNT))
+    # [TBM] Only one version should subsist with md_residual
+    NB_FRAMES = int(video_stream.get(cv2.CAP_PROP_FRAME_COUNT))
     # Get width and height of video stream
-    frameWidth = int(videoStream.get(cv2.CAP_PROP_FRAME_WIDTH))
-    frameHeight = int(videoStream.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    FRAME_WIDTH = int(video_stream.get(cv2.CAP_PROP_FRAME_WIDTH))
+    FRAME_HEIGHT = int(video_stream.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
     # Populate a numpy array
     if method == 'numpy':
-        vs = np.zeros((nFrames, frameHeight, frameWidth, 3), dtype=np.uint8)
-        for i in range(nFrames):
-            vs[i] = videoStream.read()[1]
+        vs = np.zeros((NB_FRAMES, FRAME_HEIGHT, FRAME_WIDTH, 3), dtype=np.uint8)
+        for i in range(NB_FRAMES):
+            vs[i] = video_stream.read()[1]
     # Appends the frames in a list
     if method == 'list':
         vs = []
         while True:
-            frame = videoStream.read()[1]
+            frame = video_stream.read()[1]
             if frame is not None:
                 vs.append(frame)
             else:
                 break
     if method == 'generator':
-        vs = videoStream
+        vs = video_stream
 
-    print("[INFO] Imported {} frames with shape x-{} y-{}".format(nFrames, frameWidth, frameHeight))
-    return vs, nFrames, frameWidth, frameHeight
+    print("[INFO] Imported {} frames with shape x-{} y-{}".format(NB_FRAMES, FRAME_WIDTH, FRAME_HEIGHT))
+    return vs, NB_FRAMES, FRAME_WIDTH, FRAME_HEIGHT
 
 
 # I. SETUP
 # I.1. Preparing the arguments
 # Videos: ../0_Database/RPi_import/
 ap = argparse.ArgumentParser()
-# ap.add_argument("-v", "--video", type=str, help="path to input video file", required=True)
+# ap.add_argument("-v", "--video", type=str, help="path to input video file", requiRED=True)
 ap.add_argument("-v", "--video", type=str, help="path to input video file")
-ap.add_argument("-t", "--tracker", type=str, default="csrt", help="OpenCV object tracker type")
+ap.add_argument("-t", "--TRACKER", type=str, default="csrt", help="OpenCV object TRACKER type")
 ap.add_argument("-s", "--skip", type=int, default=0, help="Proportion of BBox to save to file")
 ap.add_argument("-n", "--neural_network_size", type=str, default='224x224', help="BBox crop size for NN input")
 args = vars(ap.parse_args())
@@ -143,20 +155,20 @@ OPENCV_OBJECT_TRACKERS = {
 # I.3. Cache the video & create folder architecture
 print("Caching video...")
 t0 = time.perf_counter()
-videoPath = args["video"]
-vs = cv2.VideoCapture(videoPath)
+VIDEO_PATH = args["video"]
+vs = cv2.VideoCapture(VIDEO_PATH)
 # I.3.1 Creating the folder architecture
-videoFolder = os.path.split(videoPath)[0]
-ts = os.path.split(videoPath)[1][:14]
-sourceBbPath = os.path.join(videoFolder, ts+"sourceBB.pickle")
-extrapolatedBbPath = os.path.join(videoFolder, ts+"extrapolatedBB.pickle")
-cropFolder = os.path.join(os.path.split(videoPath)[0], ts+'NN_crops')
-nnSizeCropsFolder = os.path.join(cropFolder, 'nnSizeCrops')
-cropsResizedToNnFolder = os.path.join(cropFolder, 'cropsResizedToNn')
-negatives = os.path.join(cropFolder, 'negatives')
+video_folder = os.path.split(VIDEO_PATH)[0]
+ts = os.path.split(VIDEO_PATH)[1][:14]
+source_bbox_path = os.path.join(video_folder, ts+"sourceBB.pickle")
+extrapolated_bbox_path = os.path.join(video_folder, ts+"extrapolatedBB.pickle")
+crop_folder = os.path.join(os.path.split(VIDEO_PATH)[0], ts+'NN_crops')
+nn_size_crops_folder = os.path.join(crop_folder, 'nnSizeCrops')
+crops_resized_to_nn_folder = os.path.join(crop_folder, 'cropsResizedToNn')
+negatives = os.path.join(crop_folder, 'negatives')
 
 # I.3.2 Cache the video
-vs_cache, nFrames, frameWidth, frameHeight = loadVideo(vs, method='list')
+vs_cache, NB_FRAMES, FRAME_WIDTH, FRAME_HEIGHT = load_video(vs, method='list')
 """[TBR]
 vs_cache = []
 while True:
@@ -167,36 +179,36 @@ while True:
         break
 """
 t1 = time.perf_counter()
-print("Caching done in {:.2f} s\tRAM used: {} Mb".format(t1-t0, checkRamUse()//2**20))
+print("Caching done in {:.2f} s\tRAM used: {} Mb".format(t1-t0, check_ram_use()//2**20))
 
 # I.4. Initialize various variables
 index = 0
-frameChange = False
+frame_change = False
 # Tracking related
-tracker = OPENCV_OBJECT_TRACKERS["csrt"]()
-flagTrackerActive = False
-flagSuccess = False
+TRACKER = OPENCV_OBJECT_TRACKERS["csrt"]()
+flag_tracker_active = False
+flag_success = False
 box = (0, 0, 0, 0)
-heliBBox = []
+BBOX_HELI = []
 skip = args["skip"]
-# nnSize is a pair of even number otherwise next larger even number is used.
-nnSize = tuple(int(s) for s in args["neural_network_size"].split('x'))
+# nn_size is a pair of even number otherwise next larger even number is used.
+nn_size = tuple(int(s) for s in args["neural_network_size"].split('x'))
 try:
-    assert nnSize[0] % 2 == 0
-    assert nnSize[1] % 2 == 0
+    assert nn_size[0] % 2 == 0
+    assert nn_size[1] % 2 == 0
 except AssertionError:
-    # Make nnSize the nearest larger even number
-    nnSize_0 = nnSize[0] if nnSize[0] % 2 == 0 else nnSize[0]+1
-    nnSize_1 = nnSize[1] if nnSize[1] % 2 == 0 else nnSize[1]+1
-    nnSize = (nnSize_0, nnSize_1)
-    print("neural_network_size needs to be a pair of even numbers. Input was adjusted to nnSize = ({}, {})".format(*nnSize))
-windowName = "Video Feed"
+    # Make nn_size the nearest larger even number
+    nn_size_0 = nn_size[0] if nn_size[0] % 2 == 0 else nn_size[0]+1
+    nn_size_1 = nn_size[1] if nn_size[1] % 2 == 0 else nn_size[1]+1
+    nn_size = (nn_size_0, nn_size_1)
+    print("neural_network_size needs to be a pair of even numbers. Input was adjusted to nn_size = ({}, {})".format(*nn_size))
+window_name = "Video Feed"
 
 
 # II. PROCESS THE VIDEO
 # frame = vs_cache[index]
 # frame = imutils.resize(frame, width=500)
-cv2.imshow(windowName, vs_cache[index])
+cv2.imshow(window_name, vs_cache[index])
 while True:
     # wait for user's choice
     key = cv2.waitKey(1) & 0xFF
@@ -205,40 +217,40 @@ while True:
     if key == ord('a'):
         if index > 0:
             index -= 1
-            frameChange = True
+            frame_change = True
     if key == ord('d'):
         if index < len(vs_cache)-1:
             index += 1
-            frameChange = True
+            frame_change = True
     if key == ord('s'):
-        if flagTrackerActive:  # Already tracking -> deactivate
-            tracker = OPENCV_OBJECT_TRACKERS["csrt"]()  # reset
-            flagTrackerActive = False
-            flagSuccess = False
+        if flag_tracker_active:  # Already tracking -> deactivate
+            TRACKER = OPENCV_OBJECT_TRACKERS["csrt"]()  # reset
+            flag_tracker_active = False
+            flag_success = False
             box = (0, 0, 0, 0)
             print("Tracker deactivated!")
         else:  # not elif to let the user move the frame
-            roi = cv2.selectROI(windowName, vs_cache[index], fromCenter=False, showCrosshair=True)
-            tracker.init(vs_cache[index], roi)  # Init tracker
-            flagTrackerActive = True
+            roi = cv2.selectROI(window_name, vs_cache[index], fromCenter=False, showCrosshair=True)
+            TRACKER.init(vs_cache[index], roi)  # Init TRACKER
+            flag_tracker_active = True
             print("Tracker activated! Selection is ", roi)
 
     # Update screen if there was a change
-    if frameChange:  # The frame index has changed!
+    if frame_change:  # The frame index has changed!
         # 1. Update the frame
         frame = vs_cache[index].copy()  # Don't edit the original cache!
         (H, W) = frame.shape[:2]
         info = [("Frame", index)]
-        # 2. Manage the tracker
-        if flagTrackerActive:
-            (flagSuccess, box) = tracker.update(frame)  # Update tracker
+        # 2. Manage the TRACKER
+        if flag_tracker_active:
+            (flag_success, box) = TRACKER.update(frame)  # Update TRACKER
             (x, y, w, h) = [int(v) for v in box]
             cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
             info.append(("Box", (x, y, w, h)))
-            if flagSuccess:
-                heliBBox.append([index, (x, y, w, h)])
+            if flag_success:
+                BBOX_HELI.append([index, (x, y, w, h)])
                 info.append(("Success", "Yes"))
-                flagSuccess = False
+                flag_success = False
             else:
                 info.append(("Success", "No"))
         else:
@@ -249,126 +261,126 @@ while True:
         for (i, (k, v)) in enumerate(info):
             text = "{}: {}".format(k, v)
             cv2.putText(frame, text, (10, (i+1) * 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-        cv2.imshow(windowName, frame)
+        cv2.imshow(window_name, frame)
         # 4. Reset flag
-        frameChange = False  # Back to normal
+        frame_change = False  # Back to normal
 
 cv2.destroyAllWindows()
 
 
 # III. SAVE BBOXES AND EXTRAPOLATED BBOXES TO FILE
 # III.1. Pickle the source BBoxes as a dict
-with open(sourceBbPath, 'wb') as f:
-    heliBBoxSource = dict()
-    for entry in heliBBox:
-        heliBBoxSource[entry[0]] = entry[1]  # Store the tuples only
-    pickle.dump(heliBBoxSource, f, protocol=pickle.HIGHEST_PROTOCOL)
+with open(source_bbox_path, 'wb') as f:
+    heli_bbox_source = dict()
+    for entry in BBOX_HELI:
+        heli_bbox_source[entry[0]] = entry[1]  # Store the tuples only
+    pickle.dump(heli_bbox_source, f, protocol=pickle.HIGHEST_PROTOCOL)
 
 # III.2. Pickle the extrapolated BBoxes as a dict
-with open(extrapolatedBbPath, 'wb') as f:
-    heliBBoxExtrapolated = dict()
-    if len(heliBBox) >= 2:
-        for index in range(len(heliBBox)-1):  # Not great coding but it works.
+with open(extrapolated_bbox_path, 'wb') as f:
+    heli_bbox_extrapolated = dict()
+    if len(BBOX_HELI) >= 2:
+        for index in range(len(BBOX_HELI)-1):  # Not great coding but it works.
             # Case 1: next BBox is in the next frame
-            if heliBBox[index+1][0] == heliBBox[index][0]+1:
-                heliBBoxExtrapolated[heliBBox[index][0]] = heliBBox[index][1]  # Store the bbox
+            if BBOX_HELI[index+1][0] == BBOX_HELI[index][0]+1:
+                heli_bbox_extrapolated[BBOX_HELI[index][0]] = BBOX_HELI[index][1]  # Store the bbox
             # Case 2: next BBox is a few frames away -> we extrapolate
             else:
-                (xs, ys, wSize, hs) = heliBBox[index][1]
-                (xf, yf, wf, hf) = heliBBox[index+1][1]
-                n = heliBBox[index+1][0]-heliBBox[index][0]
+                (xs, ys, ws, hs) = BBOX_HELI[index][1]
+                (xf, yf, wf, hf) = BBOX_HELI[index+1][1]
+                n = BBOX_HELI[index+1][0] - BBOX_HELI[index][0]
                 for i in range(n):  # Extrapolate the BBoxes
-                    heliBBoxExtrapolated[heliBBox[index][0]+i] = (round(xs+i*(xf-xs)/n), round(ys+i*(yf-ys)/n), round(wSize+i*(wf-wSize)/n), round(hs+i*(hf-hs)/n))
+                    heli_bbox_extrapolated[BBOX_HELI[index][0]+i] = (round(xs + i*(xf-xs)/n), round(ys + i*(yf-ys)/n), round(ws + i*(wf-ws)/n), round(hs + i*(hf-hs)/n))
     else:  # There are 0 or 1 frame -> we just write that
-        for entry in heliBBox:
-            heliBBoxExtrapolated[entry[0]] = entry[1]
-    pickle.dump(heliBBoxExtrapolated, f, protocol=pickle.HIGHEST_PROTOCOL)
+        for entry in BBOX_HELI:
+            heli_bbox_extrapolated[entry[0]] = entry[1]
+    pickle.dump(heli_bbox_extrapolated, f, protocol=pickle.HIGHEST_PROTOCOL)
 
 
 # IV. SANITY CHECK: MAKE SURE THE EXTRAPOLATION OVERLAYS WITH ORIGINAL VIDEO
 # IV.1. Import extrapolated bboxes
-with open(extrapolatedBbPath, 'rb') as f:
-    heliBBoxExtrapolated = pickle.load(f)
+with open(extrapolated_bbox_path, 'rb') as f:
+    heli_bbox_extrapolated = pickle.load(f)
 
 # IV.2. Replay the video with them & save non-skipped crops for NN
 # IV.2.1. Cleanup the crop directory (if it exists)
-if not os.path.isdir(cropFolder):
-    os.mkdir(cropFolder)
-# IV.2.2. nnSizeCropsFolder
-if os.path.isdir(nnSizeCropsFolder):
-    fileList = glob(os.path.join(nnSizeCropsFolder, '*'))
-    # print(os.path.join(nnSizeCropsFolder,'*'))
-    # print(fileList)
-    if len(fileList) > 0:
-        for f in fileList:
+if not os.path.isdir(crop_folder):
+    os.mkdir(crop_folder)
+# IV.2.2. nn_size_crops_folder
+if os.path.isdir(nn_size_crops_folder):
+    list_file = glob(os.path.join(nn_size_crops_folder, '*'))
+    # print(os.path.join(nn_size_crops_folder,'*'))
+    # print(list_file)
+    if len(list_file) > 0:
+        for f in list_file:
             os.remove(f)
 else:
-    os.mkdir(nnSizeCropsFolder)
-# IV.2.3. cropsResizedToNnFolder
-if os.path.isdir(cropsResizedToNnFolder):
-    fileList = glob(os.path.join(cropsResizedToNnFolder, '*'))
-    # print(os.path.join(cropsResizedToNnFolder,'*'))
-    # print(fileList)
-    if len(fileList) > 0:
-        for f in fileList:
+    os.mkdir(nn_size_crops_folder)
+# IV.2.3. crops_resized_to_nn_folder
+if os.path.isdir(crops_resized_to_nn_folder):
+    list_file = glob(os.path.join(crops_resized_to_nn_folder, '*'))
+    # print(os.path.join(crops_resized_to_nn_folder,'*'))
+    # print(list_file)
+    if len(list_file) > 0:
+        for f in list_file:
             os.remove(f)
 else:
-    os.mkdir(cropsResizedToNnFolder)
+    os.mkdir(crops_resized_to_nn_folder)
 # IV.2.4. negatives
 if os.path.isdir(negatives):
-    fileList = glob(os.path.join(negatives, '*'))
+    list_file = glob(os.path.join(negatives, '*'))
     # print(os.path.join(negatives,'*'))
-    # print(fileList)
-    if len(fileList) > 0:
-        for f in fileList:
+    # print(list_file)
+    if len(list_file) > 0:
+        for f in list_file:
             os.remove(f)
 else:
     os.mkdir(negatives)
 
 # IV.2.2 Replay the video and save the crops to file
-cropCounter = 0  # Used to increment picture name
-bboxCounter = 0  # Used for the skip function
+counter_crop = 0  # Used to increment picture name
+counter_bbox = 0  # Used for the skip function
 
 for index, frame in enumerate(vs_cache):
     frame = frame.copy()
     try:
-        (x, y, w, h) = heliBBoxExtrapolated[index]
-        xc, yc = x+w//2, y+h//2
+        (x, y, w, h) = heli_bbox_extrapolated[index]
+        xc, yc = x + w//2, y + h//2
         # Take the max but make it even (odd numbers are a mess with //2)
-        s = max(w, h) if max(w, h) % 2 == 0 else max(w, h)+1
-        if bboxCounter % (skip+1) == 0:
-            # IV.2.2.1 First option: nnSize crop
+        s = max(w, h) if max(w, h) % 2 == 0 else max(w, h) + 1
+        if counter_bbox % (skip+1) == 0:
+            # IV.2.2.1 First option: nn_size crop
             # Limit the size of the crop
-            xStart = max(0, xc-nnSize[0]//2)
-            xEnd = min(frameWidth, xc+nnSize[0]//2)
-            yStart = max(0, yc-nnSize[1]//2)
-            yEnd = min(frameHeight, yc+nnSize[1]//2)
-            image = frame[yStart:yEnd, xStart:xEnd]
-            image = nnSizeCrop(image, nnSize, (xc, yc))
-            outPath = os.path.join(nnSizeCropsFolder, ts+str(cropCounter)+'.jpg')
-            cv2.imwrite(outPath, image)
-            # IV.2.2.2 Second option: (square) bbox crop resized to nnSize
-            xStart = max(0, xc-s//2)
-            xEnd = min(frameWidth, xc+s//2)
-            yStart = max(0, yc-s//2)
-            yEnd = min(frameHeight, yc+s//2)
-            image = frame[yStart:yEnd, xStart:xEnd]
-            image = nnSizeCrop(image, (s, s), (xc, yc))  # pad to (s, s)
-            # Then only we resize to nnSize
-            image = cv2.resize(image, nnSize)  # Resize to NN input size
-            outPath = os.path.join(cropsResizedToNnFolder, ts+str(cropCounter)+'.jpg')
-            cv2.imwrite(outPath, image)
+            x_start = max(0, xc - nn_size[0]//2)
+            x_end = min(FRAME_WIDTH, xc + nn_size[0]//2)
+            y_start = max(0, yc - nn_size[1]//2)
+            y_end = min(FRAME_HEIGHT, yc + nn_size[1]//2)
+            image = frame[y_start:y_end, x_start:x_end]
+            image = nn_size_crop(image, nn_size, (xc, yc))
+            out_path = os.path.join(nn_size_crops_folder, ts+str(counter_crop)+'.jpg')
+            cv2.imwrite(out_path, image)
+            # IV.2.2.2 Second option: (square) bbox crop resized to nn_size
+            x_start = max(0, xc - s//2)
+            x_end = min(FRAME_WIDTH, xc + s//2)
+            y_start = max(0, yc - s//2)
+            y_end = min(FRAME_HEIGHT, yc + s//2)
+            image = frame[y_start:y_end, x_start:x_end]
+            image = nn_size_crop(image, (s, s), (xc, yc))  # pad to (s, s)
+            # Then only we resize to nn_size
+            image = cv2.resize(image, nn_size)  # Resize to NN input size
+            out_path = os.path.join(crops_resized_to_nn_folder, ts+str(counter_crop)+'.jpg')
+            cv2.imwrite(out_path, image)
             # IV.2.2.3 Create a negative image - no helico
-            image = cropNegative(frame, nnSize, (xc, yc))
-            outPath = os.path.join(negatives, ts+str(cropCounter)+'.jpg')
-            cv2.imwrite(outPath, image)
+            image = crop_negative(frame, nn_size, (xc, yc))
+            out_path = os.path.join(negatives, ts+str(counter_crop)+'.jpg')
+            cv2.imwrite(out_path, image)
             # Increment crop counter
-            cropCounter += 1
-        cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
-        bboxCounter += 1
+            counter_crop += 1
+        cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+        counter_bbox += 1
     except KeyError:
         pass
-    cv2.imshow(windowName, frame)
+    cv2.imshow(window_name, frame)
     key = cv2.waitKey(1) & 0xFF
     if key == ord('q'):
         break
