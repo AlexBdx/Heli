@@ -3,7 +3,11 @@ from . import input_processing
 
 
 class MyTestCase(unittest.TestCase):
-    pass
+    def setUp(self):
+        pass
+
+    def test_something(self):
+        pass
 
 
 if __name__ == '__main__':
