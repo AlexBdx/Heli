@@ -17,7 +17,7 @@ from sklearn.model_selection import ParameterGrid
 import pickle
 
 # Custom made files
-import imageStabilizer
+from . import imageStabilizer
 
 
 # 0. DECLARATIONS

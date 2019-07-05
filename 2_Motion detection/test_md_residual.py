@@ -1,5 +1,5 @@
 import unittest
-import md_residual
+from . import md_residual
 import numpy as np
 
 
