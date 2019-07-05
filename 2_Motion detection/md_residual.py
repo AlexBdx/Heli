@@ -29,7 +29,8 @@ def check_ram_use():
     pid = os.getpid()
     py = psutil.Process(pid)
     memory_use = py.memory_info()[0]
-    print('RAM use: ', memory_use)
+    # print('RAM use: ', memory_use)
+    return memory_use
 
 
 def centered_bbox(bbox):
@@ -219,7 +220,6 @@ def main():
     video_stream, nb_frames, frame_width, frame_height = import_stream(VIDEO_STREAM_PATH)
     bbox_heli_ground_truth = import_bbox_heli(PATH_BBOX)  # Creates a dict
 
-
     # Min/Max area for the helicopter detection.
     # Min is difficult: it could be as small as a speck in the distance
     # Max is easier: you know how close it can possibly get (the helipad)
@@ -328,7 +328,8 @@ def main():
                     retvalLarge, response = cv2.phaseCorrelate(np.float32(current_gray_frame[:lCrop, :lCrop])/255.0, 
                     np.float32(current_gray_frame[motion:lCrop+motion, motion:lCrop+motion])/255.0)
                     t33 = time.perf_counter()
-                    print("Full image is {} bigger and takes {} more time".format((lCrop/sCrop)**2, (t33-t32)/(t32-t31)))
+                    print("Full image is {} bigger and takes {} more time"
+                    .format((lCrop/sCrop)**2, (t33-t32)/(t32-t31)))
                     print("xs {:.3f} xl {:.3f} Rx={:.3f} ys {:.3f} yl {:.3f} Ry={:.3f}".format(
                     retvalSmall[0], retvalLarge[0], retvalSmall[0]/retvalLarge[0], 
                     retvalSmall[1], retvalLarge[1], retvalSmall[1]/retvalLarge[1]))
@@ -354,7 +355,8 @@ def main():
             diff_frame = cv2.absdiff(current_gauss_frame, previous_gauss_frame)
             """[TBR/XP] absdiff strategies in the gaussian space"""
             """#Average of the absdiff with the current_frame for all residual connections (1toN strategy)
-            # Basically, you do (1/m)*sum(|current_frame-previousGauss[i]|, i=0..N), N being dictated by residualConnections
+            # Basically, you do (1/m)*sum(|current_frame-previousGauss[i]|, i=0..N), 
+            # N being dictated by residualConnections
             diff_frame = np.zeros(current_gauss_frame.shape)
             for gaussFrame in previous_gauss_frame:
                 diff_frame += cv2.absdiff(current_gauss_frame, gaussFrame)
@@ -363,7 +365,8 @@ def main():
             # Best f1_score was about 0.32 (0.34 for simple absdiff(N, N-k))
             """
             """#Average of the absdiff between n and n-1 frame (NtoN-1 strategy)
-            # Basically, you do (1/m)*sum(|previousGauss[i]-previousGauss[i+1]|, i=0..N-1), N being dictated by residualConnections
+            # Basically, you do (1/m)*sum(|previousGauss[i]-previousGauss[i+1]|, i=0..N-1), 
+            # N being dictated by residualConnections
             # In that case, an array of the differences in the gaussian space could be cached to just pick 
             # what you want, but there is not enough RAM.
             diff_frame = np.zeros(current_gauss_frame.shape)
@@ -393,9 +396,9 @@ def main():
             # dilate the thresholded image to fill in holes, then find contours
             if sd['diffMethod'] == 0:
                 diff_frame = cv2.dilate(diff_frame, None, iterations=sd['dilationIterations'])
-                t8 = time.perf_counter()
             elif sd['diffMethod'] == 1:
                 diff_frame = cv2.morphologyEx(diff_frame, cv2.MORPH_OPEN, None)
+
             if DISPLAY_FEED != '000':
                 thresh_feed = diff_frame.copy()
             cnts = cv2.findContours(diff_frame, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -451,7 +454,7 @@ def main():
             # cv2.rectangle(current_frame, (x, y), (x + s, y + s), GREEN, 2)
             # cv2.rectangle(current_frame, (x, y), (x + w, y + h), GREEN, 2)
             if DISPLAY_FEED == '001':
-                cv2.rectangle(current_frame, (x_gt, y_gt), (x_gt + w_gt, y_gt + h_gt), RED, 2)  # Display ground truth in RED
+                cv2.rectangle(current_frame, (x_gt, y_gt), (x_gt + w_gt, y_gt + h_gt), RED, 2)
             t9 = time.perf_counter()
 
             # VIII. draw the text and timestamp on the current_frame
@@ -485,15 +488,14 @@ def main():
             # X. Save frames & track KPI
             # The deque has a maxlen of residualConnections so the first-in will pop
             previous_gray_frame.append(current_gray_frame)
-            # previous_gauss_frame.append(cv2.GaussianBlur(current_gray_frame, (sd['gaussWindow'], sd['gaussWindow']), 0))
             nb_bbox.append([len(cnts), large_box, counter_bbox_heli, 1 if counter_bbox_heli else 0])
 
             fps.update()
             t10 = time.perf_counter()
             if FLAG_DISPLAY_TIMING:
                 new_timing = {'Read frame': t1 - t0, 'Convert to grayscale': t3 - t2, 'Stabilize': t4 - t3,
-                              'Double Gauss': t5 - t4, 'Abs diff': t6 - t5, 'Thresholding': t7 - t6, 'Dilation': t8 - t7,
-                              'Count boxes': t9 - t8, 'Finalize': t10 - t9}
+                              'Double Gauss': t5 - t4, 'Abs diff': t6 - t5, 'Thresholding': t7 - t6,
+                              'Dilation': t8 - t7, 'Count boxes': t9 - t8, 'Finalize': t10 - t9}
                 for key in timing.keys():
                     timing[key] += new_timing[key]
 
@@ -504,15 +506,8 @@ def main():
             print("Code profiling for various operations (in s):\n", timing)
         cv2.destroyAllWindows()
 
-        # elapsed_time = fps.elapsed()
         average_fps = fps.fps()
-        # real_fps = bbox_frame_number / elapsed_time
-        # ratio = average_fps / real_fps
-        # print("[INFO] elasped time: {:.2f}".format(elapsed_time))
-        # print("[INFO] frame count: {}".format(bbox_frame_number))
-        # print("[INFO] approx. FPS: {:.2f} \t real FPS: {:.2f}\tRatio (approx/real): {:.2f}".format(average_fps, real_fps, ratio))
         print("[INFO] FPS: {:.2f}".format(average_fps))
-
         # print(img_stab.detailedTiming())
 
         # Impact of stabilization on number of boxes
@@ -528,7 +523,7 @@ def main():
         # Precision: how efficient is the algo at rulling out irrelevant boxes?
         precision = avg_nb_heli_bbox / avg_nb_filtered_boxes  # Ratio of helibox/nb of boxes
         # Recall: how many frames had a positive heliBox? There should be one in each.
-        recall = np.sum(bb[:, 3]) / bbox_frame_number  # Proportion of frames with helicopter
+        recall = np.sum(bb[:, 3]) / nb_frames  # Proportion of frames with helicopter
 
         # -----------------
         # SANITY CHECKS & f1_score
@@ -604,49 +599,48 @@ def main():
         print("Done. Highest f1_score: ", highest_f1_score)
 
 
-# %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-# md_residual
-# %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-ap = argparse.ArgumentParser()  #
-# ap.add_argument("-v", "--video", help="path to the video file", required=True)
-# ap.add_argument("-bb", "--bounding_boxes", type=str, help="path to ground truth bounding boxes", required=True)
-ap.add_argument("-bp", "--best_params", action='store_true', help="Display best overall/best precision/best recall")
-ap.add_argument("-r", "--restart", type=int, help="iteration restart")
-args = vars(ap.parse_args())
-
-# ------------------
-# Path constructions
-# ------------------
-# VIDEO_STREAM_PATH = args["video"]
-# PATH_BBOX = args["bounding_boxes"]
-# DISPLAY_BEST_PARAMS = args["best_params"]
-VIDEO_STREAM_PATH = '/home/alex/Desktop/Helico/0_Database/RPi_import/190624_200747/190624_200747_helico_1920x1080_45s_25fps_FB.mp4'
-PATH_BBOX = '/home/alex/Desktop/Helico/0_Database/RPi_import/190624_200747/190624_200747_extrapolatedBB.pickle'
-DISPLAY_BEST_PARAMS = True
-
-# Need to change the PATH_ALL_RESULTS name
-FOLDER_PATH = os.path.split(VIDEO_STREAM_PATH)[0]
-TIMESTAMP = os.path.split(VIDEO_STREAM_PATH)[1][:14]
-PATH_ALL_RESULTS = os.path.join(FOLDER_PATH, TIMESTAMP + "MD_ParamSearch_All.csv")
-PATH_BEST_PARAMS = os.path.join(FOLDER_PATH, TIMESTAMP + "MD_ParamSearch_Best.pickle")
-PATH_PARAM_SPACE = os.path.join(FOLDER_PATH, TIMESTAMP + "MD_ParamSearch_Space.pickle")
-
-# --------------
-# CONSTANTS
-# --------------
-# [0]: threshold, [1]: absdiff, [2]: color frame
-DISPLAY_FEED = '000' if not DISPLAY_BEST_PARAMS else '001'
-# BBOX_ERROR is max error ratio to count a bbox as matching ground truth
-# This applies to all axis (xc, yc, w, h)
-IOU = 0.5
-RED = (0, 0, 255)
-GREEN = (0, 255, 0)
-BLUE = (255, 0, 0)
-PADDING = 10  # px
-FLAG_PHASE_CORRELATION = False  # This is too slow (>3x slower than mgp)
-FLAG_OPTICAL_FLOW = False  # A bit better, but still way too slow
-FLAG_DISPLAY_TIMING = False
-
 if __name__ == '__main__':
+
+    ap = argparse.ArgumentParser()  #
+    # ap.add_argument("-v", "--video", help="path to the video file", required=True)
+    # ap.add_argument("-bb", "--bounding_boxes", type=str, help="path to ground truth bounding boxes", required=True)
+    ap.add_argument("-bp", "--best_params", action='store_true', help="Display best overall/best precision/best recall")
+    ap.add_argument("-r", "--restart", type=int, help="iteration restart")
+    args = vars(ap.parse_args())
+
+    # ------------------
+    # Path constructions
+    # ------------------
+    # VIDEO_STREAM_PATH = args["video"]
+    # PATH_BBOX = args["bounding_boxes"]
+    # DISPLAY_BEST_PARAMS = args["best_params"]
+    VIDEO_STREAM_PATH = '/home/alex/Desktop/Helico/0_Database/RPi_import/' \
+                        '190624_200747/190624_200747_helico_1920x1080_45s_25fps_FB.mp4'
+    PATH_BBOX = '/home/alex/Desktop/Helico/0_Database/RPi_import/' \
+                '190624_200747/190624_200747_extrapolatedBB.pickle'
+    DISPLAY_BEST_PARAMS = False
+
+    # Need to change the PATH_ALL_RESULTS name
+    FOLDER_PATH = os.path.split(VIDEO_STREAM_PATH)[0]
+    TIMESTAMP = os.path.split(VIDEO_STREAM_PATH)[1][:14]
+    PATH_ALL_RESULTS = os.path.join(FOLDER_PATH, TIMESTAMP + "MD_ParamSearch_All.csv")
+    PATH_BEST_PARAMS = os.path.join(FOLDER_PATH, TIMESTAMP + "MD_ParamSearch_Best.pickle")
+    PATH_PARAM_SPACE = os.path.join(FOLDER_PATH, TIMESTAMP + "MD_ParamSearch_Space.pickle")
+
+    # --------------
+    # CONSTANTS
+    # --------------
+    # [0]: threshold, [1]: absdiff, [2]: color frame
+    DISPLAY_FEED = '000' if not DISPLAY_BEST_PARAMS else '001'
+    # BBOX_ERROR is max error ratio to count a bbox as matching ground truth
+    # This applies to all axis (xc, yc, w, h)
+    IOU = 0.5
+    RED = (0, 0, 255)
+    GREEN = (0, 255, 0)
+    BLUE = (255, 0, 0)
+    PADDING = 10  # px
+    FLAG_PHASE_CORRELATION = False  # This is too slow (>3x slower than mgp)
+    FLAG_OPTICAL_FLOW = False  # A bit better, but still way too slow
+    FLAG_DISPLAY_TIMING = False
+
     main()
