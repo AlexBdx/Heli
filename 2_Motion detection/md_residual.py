@@ -32,21 +32,15 @@ def check_ram_use():
     print('RAM use: ', memory_use)
 
 
-def bounding_square(c):
+def centered_bbox(bbox):
     """
-    Creates a centered square bounding box rather than a upper left corner, rectangle, one.
-    :param c: contour
-    :return: center of the bb and characteristic dimension
+    Returns a centered bbox
+    :param bbox: original bounding box
+    :return: x, y are replaced by xc, yc
     """
-    (x, y, w, h) = cv2.boundingRect(c)
+    (x, y, w, h) = bbox
     (xc, yc) = (x + w // 2, y + h // 2)
-    s = max(w, h)
-    (xs, ys) = (xc - s // 2, yc - s // 2)
-    # (xs, ys, s) = (1200, 1, 100) # Test square boundaries
-    # (xs, ys, s) = (-1, 1, 100) # Test square boundaries
-    # (xs, ys, s) = (1000, -1, 100) # Test square boundaries
-    # (xs, ys, s) = (1000, 700, 100) # Test square boundaries
-    return xs, ys, s
+    return xc, yc, w, h
 
 
 def show_feed(s, thresh_feed, delta_frame, current_frame):
@@ -133,7 +127,7 @@ def create_log(path, params):
     with open(path, 'w') as f:
         w = csv.writer(f)
         new_header = list(params.keys()) + ["real_fps", "avg_nb_boxes", "avg_nb_filtered_boxes", "avg_nb_heli_bbox",
-                                            "percent_heli_total_filtered", "percent_frame_with_heli", "f1_score"]
+                                            "precision", "recall", "f1_score"]
         w.writerow(new_header)
         print("Log header is now ", new_header)
     return new_header
@@ -151,6 +145,45 @@ def import_bbox_heli(heli_bb_file):
     return bbox_heli_ground_truth
 
 
+def xywh_to_x1y1x2y2(bbox):
+    """
+    Convert a bounding box in the (x, y, w, h) format to the (x1, y1, x2, y2) format
+    :param bbox: Bounding box
+    :return: Converted bounding box
+    """
+    return bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]
+
+
+def bb_intersection_over_union(box_a, box_b):
+    """
+    Calculates IoU (Intersection over Union) for two boxes.
+    Bounding boxes have to be submitted in the (x1, y1, x2, y2) format
+    :param box_a: bounding box (order irrelevant)
+    :param box_b: bounding box (order irrelevant)
+    :return: 0 <= score <= 1
+    """
+    xa = max(box_a[0], box_b[0])
+    ya = max(box_a[1], box_b[1])
+    xb = min(box_a[2], box_b[2])
+    yb = min(box_a[3], box_b[3])
+    
+    # compute the area of intersection rectangle
+    inter_area = max(0, xb - xa) * max(0, yb - ya)
+    
+    # compute the area of both the prediction and ground-truth
+    # rectangles
+    box_a_area = (box_a[2] - box_a[0]) * (box_a[3] - box_a[1])
+    box_b_area = (box_b[2] - box_b[0]) * (box_b[3] - box_b[1])
+    
+    # compute the intersection over union by taking the intersection
+    # area and dividing it by the sum of prediction + ground-truth
+    # areas - the intersection area
+    iou = inter_area / (box_a_area + box_b_area - inter_area)
+    
+    # return the intersection over union value
+    return iou
+
+
 def main():
     """
 
@@ -165,12 +198,12 @@ def main():
         except FileNotFoundError:
             print("[ERROR] Best param file not found.")
             raise
-        iteration_dict = [best_params, best_recall, best_precision]
+        iteration_dict = [best_params, best_recall, best_precision]  # Matches the dump order
     else:
         params = {
-            'gaussWindow': range(3, 4, 2),
+            'gaussWindow': range(3, 8, 2),
             'mgp': range(25, 26, 25),
-            'residualConnections': range(1, 3, 2),
+            'residualConnections': range(1, 10, 2),
             'winSize': range(3, 4, 2),
             'maxLevel': range(5, 6, 3),
             'threshold_low': range(65, 66, 10),
@@ -377,7 +410,7 @@ def main():
             counter_bbox_heli = 0
 
             # VII. Process the BB and classify them
-            xGT, yGT, wGT, hGT = bbox_heli_ground_truth[frame_number]  # Ground Truth data
+            x_gt, y_gt, w_gt, h_gt = bbox_heli_ground_truth[frame_number]  # Ground Truth data
             for c in cnts:
                 # A. Filter out useless BBs
                 # 1. if the contour is too small or too large, ignore it
@@ -388,8 +421,7 @@ def main():
                 # compute the bounding box for the contour, draw it on the current_frame,
                 # and update the text
                 (x, y, w, h) = cv2.boundingRect(c)
-                # (x, y, s) = bounding_square(c) # Great idea but we will make a square ourselves later
-
+                
                 # 2. Box partially out of the frame
                 # if x < 0 or x+s > frame_width or y < 0 or y+s > frame_height: # Square box
                 if x < 0 or x + w > frame_width or y < 0 or y + h > frame_height:
@@ -403,11 +435,8 @@ def main():
                 # Check if the corner is within range of the actual corner
                 # That data was obtained by running a CSRT TRACKER on the helico
 
-                # Is this bbox close enough to the ground truth bbox? Rectangular window
-                if abs(x - xGT) < BBOX_ERROR * wGT and \
-                        abs(y - yGT) < BBOX_ERROR * hGT and \
-                        (1 - BBOX_ERROR) * wGT < w < (1 + BBOX_ERROR) * wGT and \
-                        (1 - BBOX_ERROR) * hGT < h < (1 + BBOX_ERROR) * hGT:
+                # Classify bboxes based on their IOU with ground truth
+                if bb_intersection_over_union((x, y, w, h), (x_gt, y_gt, w_gt, h_gt)) >= IOU:
                     counter_bbox_heli += 1
                     if DISPLAY_FEED == '001':  # Display positive bbox found in GREEN
                         cv2.putText(current_frame, "heli", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, GREEN, 2)
@@ -422,7 +451,7 @@ def main():
             # cv2.rectangle(current_frame, (x, y), (x + s, y + s), GREEN, 2)
             # cv2.rectangle(current_frame, (x, y), (x + w, y + h), GREEN, 2)
             if DISPLAY_FEED == '001':
-                cv2.rectangle(current_frame, (xGT, yGT), (xGT + wGT, yGT + hGT), RED, 2)  # Display ground truth in RED
+                cv2.rectangle(current_frame, (x_gt, y_gt), (x_gt + w_gt, y_gt + h_gt), RED, 2)  # Display ground truth in RED
             t9 = time.perf_counter()
 
             # VIII. draw the text and timestamp on the current_frame
@@ -437,7 +466,7 @@ def main():
                     else:
                         raise ValueError('There should only be 3 best results in the best_param log file')
                     cv2.putText(current_frame, "Current run: {} - f1_score: {:.3f} - recall: {:.3f} - precision: {:.3f}"
-                                .format(run, sd['f1_score'], sd['percent_frame_with_heli'], sd["percent_heli_total_filtered"]),
+                                .format(run, sd['f1_score'], sd['recall'], sd["precision"]),
                                 (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, RED, 2)
 
                 cv2.putText(current_frame, "BBoxes: {} found, {} heliBox"
@@ -497,23 +526,23 @@ def main():
         avg_nb_filtered_boxes = np.mean(bb[:, 1])
         avg_nb_heli_bbox = np.mean(bb[:, 2])
         # Precision: how efficient is the algo at rulling out irrelevant boxes?
-        percent_heli_total_filtered = avg_nb_heli_bbox / avg_nb_filtered_boxes  # Ratio of helibox/nb of boxes
+        precision = avg_nb_heli_bbox / avg_nb_filtered_boxes  # Ratio of helibox/nb of boxes
         # Recall: how many frames had a positive heliBox? There should be one in each.
-        percent_frame_with_heli = np.sum(bb[:, 3]) / bbox_frame_number  # Proportion of frames with helicopter
+        recall = np.sum(bb[:, 3]) / bbox_frame_number  # Proportion of frames with helicopter
 
         # -----------------
         # SANITY CHECKS & f1_score
         # -----------------
         try:
-            assert 0 < percent_frame_with_heli <= 1
-            assert 0 < percent_heli_total_filtered <= 1
+            assert 0 < recall <= 1
+            assert 0 < precision <= 1
             assert 0 <= avg_nb_heli_bbox <= avg_nb_filtered_boxes
             assert 0 <= avg_nb_filtered_boxes <= avg_nb_boxes
-            f1_score = 2 / (1 / percent_heli_total_filtered + 1 / percent_frame_with_heli)
+            f1_score = 2 / (1 / precision + 1 / recall)
         except AssertionError:
             print('[WARNING] KPIs out of bounds - set to 0')
-            print("[WARNING] KPI: ", percent_frame_with_heli, percent_heli_total_filtered, avg_nb_heli_bbox, avg_nb_filtered_boxes)
-            percent_frame_with_heli, percent_heli_total_filtered, avg_nb_heli_bbox, avg_nb_filtered_boxes = (0, 0, 0, 0)
+            print("[WARNING] KPI: ", recall, precision, avg_nb_heli_bbox, avg_nb_filtered_boxes)
+            recall, precision, avg_nb_heli_bbox, avg_nb_filtered_boxes = (0, 0, 0, 0)
             f1_score = 0
 
         """kpis
@@ -527,7 +556,7 @@ def main():
         Av Helibb per frame: {:.3f} - Ratio of helibb: {:.3f}\tFrame with heli: {:.3f} "\
         .format(\
         avg_nb_filtered_boxes, np.std(bb[:, 1]), real_fps, \
-        avg_nb_heli_bbox, percent_heli_total_filtered, percent_frame_with_heli\
+        avg_nb_heli_bbox, precision, recall\
         )
         plt.title(titl)
         plt.show()
@@ -535,10 +564,11 @@ def main():
         # Display best params or append best results to log
         if DISPLAY_BEST_PARAMS:
             counter_best_params += 1
+            print(sd)
         else:
             # Output results - parameters+kpis
             kpis = [average_fps, avg_nb_boxes, avg_nb_filtered_boxes, avg_nb_heli_bbox,
-                    percent_heli_total_filtered, percent_frame_with_heli, f1_score]
+                    precision, recall, f1_score]
             # Warning: they are both int array of the same length so they can be added!
             sim_output = [sd[k] for k in params.keys()] + list(kpis)
 
@@ -546,11 +576,11 @@ def main():
             if f1_score > highest_f1_score:
                 highest_f1_score = f1_score
                 best_params = sim_output
-            if percent_frame_with_heli > highest_recall:
-                highest_recall = percent_frame_with_heli
+            if recall > highest_recall:
+                highest_recall = recall
                 best_recall = sim_output
-            if percent_heli_total_filtered > highest_precision:
-                highest_precision = percent_heli_total_filtered
+            if precision > highest_precision:
+                highest_precision = precision
                 best_precision = sim_output
 
             with open(PATH_ALL_RESULTS, 'a') as f:
@@ -564,7 +594,7 @@ def main():
             best_params = dict(zip(header, best_params))
             best_precision = dict(zip(header, best_precision))
             best_recall = dict(zip(header, best_recall))
-            pickle.dump([best_params, best_precision, best_recall], f, protocol=pickle.HIGHEST_PROTOCOL)
+            pickle.dump([best_params, best_recall, best_precision], f, protocol=pickle.HIGHEST_PROTOCOL)
 
         # XII.2. Pickle the params dict
         with open(PATH_PARAM_SPACE, 'wb') as f:
@@ -591,8 +621,8 @@ args = vars(ap.parse_args())
 # VIDEO_STREAM_PATH = args["video"]
 # PATH_BBOX = args["bounding_boxes"]
 # DISPLAY_BEST_PARAMS = args["best_params"]
-VIDEO_STREAM_PATH = '/home/alex/Desktop/Helico/0_Database/RPi_import/190622_234007/190622_234007_helico_1920x1080_75s_25fps_T.mp4'
-PATH_BBOX = '/home/alex/Desktop/Helico/0_Database/RPi_import/190622_234007/190622_234007_extrapolatedBB.pickle'
+VIDEO_STREAM_PATH = '/home/alex/Desktop/Helico/0_Database/RPi_import/190624_200747/190624_200747_helico_1920x1080_45s_25fps_FB.mp4'
+PATH_BBOX = '/home/alex/Desktop/Helico/0_Database/RPi_import/190624_200747/190624_200747_extrapolatedBB.pickle'
 DISPLAY_BEST_PARAMS = True
 
 # Need to change the PATH_ALL_RESULTS name
@@ -609,7 +639,7 @@ PATH_PARAM_SPACE = os.path.join(FOLDER_PATH, TIMESTAMP + "MD_ParamSearch_Space.p
 DISPLAY_FEED = '000' if not DISPLAY_BEST_PARAMS else '001'
 # BBOX_ERROR is max error ratio to count a bbox as matching ground truth
 # This applies to all axis (xc, yc, w, h)
-BBOX_ERROR = 0.5
+IOU = 0.5
 RED = (0, 0, 255)
 GREEN = (0, 255, 0)
 BLUE = (255, 0, 0)
