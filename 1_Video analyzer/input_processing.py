@@ -119,12 +119,21 @@ def load_video(video_stream, method='generator'):
     # Appends the frames in a list
     elif method == 'list':
         vs = []
+        flag_first_entry = True
         while True:
             frame = video_stream.read()[1]
-            if frame is not None:
-                vs.append(frame)
+            if flag_first_entry:
+                previous_gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                flag_first_entry = False
             else:
-                break
+                if frame is not None:
+                    # vs.append(frame)  # color
+                    # vs.append(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    vs.append(cv2.absdiff(previous_gray_frame, frame))
+                    previous_gray_frame = frame
+                else:
+                    break
     elif method == 'generator':
         vs = video_stream
     else:
@@ -217,7 +226,7 @@ def main():
             if flag_tracker_active:
                 (flag_success, box) = tracker.update(frame)  # Update tracker
                 (x, y, w, h) = [int(v) for v in box]
-                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 255, 255), 2)
                 info.append(("Box", (x, y, w, h)))
                 if flag_success:
                     bbox_heli.append([index, (x, y, w, h)])

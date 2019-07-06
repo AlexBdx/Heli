@@ -16,8 +16,11 @@ import psutil
 from sklearn.model_selection import ParameterGrid
 import pickle
 
-# Custom made files
-from . import imageStabilizer
+# Handle unittest access
+if __name__ == '__main__':
+    import imageStabilizer
+else:
+    from . import imageStabilizer
 
 
 # 0. DECLARATIONS
@@ -86,11 +89,12 @@ def import_stream(video_stream_path=None, verbose=False):
     return video_stream, nb_frames, frame_width, frame_height
 
 
-def cache_video(video_stream, method):
+def cache_video(video_stream, method, gray_scale=False):
     """
     Loads in RAM a video_stream as a list or numpy array.
     :param video_stream: the local video file to cache
     :param method: currently, numpy array or list
+    :param gray_scale: When True loads all the data as gray images
     :return: the cached video
     """
     nb_frames = int(video_stream.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -101,13 +105,15 @@ def cache_video(video_stream, method):
     if method == 'numpy':
         vs_cache = np.zeros((nb_frames, frame_height, frame_width, 3), dtype=np.uint8)
         for i in range(nb_frames):
-            vs_cache[i] = video_stream.read()[1]
+            frame = video_stream.read()[1]
+            vs_cache[i] = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if gray_scale else frame
     # Appends the frames in a list
     elif method == 'list':
         vs_cache = []
         while True:
             frame = video_stream.read()[1]
             if frame is not None:
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if gray_scale else frame
                 vs_cache.append(frame)
             else:
                 break
@@ -203,17 +209,18 @@ def main():
     else:
         params = {
             'gaussWindow': range(3, 8, 2),
+            'residualConnections': range(1, 8, 2),
+            'sigma': np.linspace(0.1, 0.9, 5),
+            'dilationIterations': range(1, 8, 2),
             'mgp': range(25, 26, 25),
-            'residualConnections': range(1, 10, 2),
             'winSize': range(3, 4, 2),
             'maxLevel': range(5, 6, 3),
             'threshold_low': range(65, 66, 10),
             'threshold_gain': np.linspace(1.25, 1.26, 1),
-            'sigma': np.linspace(0.1, 0.9, 5),
             'diffMethod': range(0, 1, 1),
-            'dilationIterations': range(1, 8, 2),
             'skipFrame': range(0, 1, 1)
         }
+
         header = create_log(PATH_ALL_RESULTS, params)
         iteration_dict = ParameterGrid(params)
 
@@ -244,7 +251,7 @@ def main():
     highest_f1_score = 0
     highest_recall = 0
     highest_precision = 0
-    vs2 = cache_video(video_stream, 'list')
+    vs2 = cache_video(video_stream, 'list', gray_scale=FLAG_GRAY_SCALE)
     for sd in tqdm.tqdm(iteration_dict):
         # -------------------------------------
         # 1. RESET THE SIM DEPENDENT VARIABLES
@@ -258,8 +265,8 @@ def main():
         previous_gray_frame = collections.deque(maxlen=sd['residualConnections'])
         # previous_gauss_frame = collections.deque(maxlen=sd['residualConnections'])
 
-        img_stab = imageStabilizer.imageStabilizer(frame_width, frame_height, maxGoodPoints=sd['mgp'],
-                                                   maxLevel=sd['maxLevel'], winSize=sd['winSize'])
+        # img_stab = imageStabilizer.imageStabilizer(frame_width, frame_height, maxGoodPoints=sd['mgp'],
+        #                                           maxLevel=sd['maxLevel'], winSize=sd['winSize'])
 
         counter_skip_frame = sd['skipFrame']  # Go through the if statement the first time
 
@@ -272,7 +279,7 @@ def main():
 
             t0 = time.perf_counter()
             # frame = vs.read()[1] # No cache
-            frame = vs2[frame_number].copy()  # Prevents editing the original frames!
+            current_frame = vs2[frame_number].copy()  # Prevents editing the original frames!
             t1 = time.perf_counter()
             # Skip all the frames that do not have a Bbox
             if frame_number < first_bbox:
@@ -291,18 +298,18 @@ def main():
             bbox_frame_number = frame_number - first_bbox  # Starts at 0, automatically incremented
             # Populate the deque with sd['residualConnections'] gray frames
             if bbox_frame_number < sd['residualConnections']:
-                current_frame = frame
-                current_gray_frame = cv2.cvtColor(current_frame, cv2.COLOR_BGR2GRAY)
+                # current_frame = frame
+                current_gray_frame = current_frame if FLAG_GRAY_SCALE else cv2.cvtColor(current_frame, cv2.COLOR_BGR2GRAY)
                 previous_gray_frame.append(current_gray_frame)
                 continue
 
             # I. Grab the current in color space
             # t0=time.perf_counter()
-            current_frame = frame
+            # current_frame = frame
 
             # II. Convert to gray scale
             t2 = time.perf_counter()
-            current_gray_frame = cv2.cvtColor(current_frame, cv2.COLOR_BGR2GRAY)
+            current_gray_frame = current_frame if FLAG_GRAY_SCALE else cv2.cvtColor(current_frame, cv2.COLOR_BGR2GRAY)
 
             # III. Stabilize the image in the gray space with latest gray frame, fwd to color space
             # Two methods (don't chain them): phase correlation & optical flow
@@ -439,7 +446,9 @@ def main():
                 # That data was obtained by running a CSRT TRACKER on the helico
 
                 # Classify bboxes based on their IOU with ground truth
-                if bb_intersection_over_union((x, y, w, h), (x_gt, y_gt, w_gt, h_gt)) >= IOU:
+                converted_current_bbox = xywh_to_x1y1x2y2((x, y, w, h))
+                converted_ground_truth_bbox = xywh_to_x1y1x2y2((x_gt, y_gt, w_gt, h_gt))
+                if bb_intersection_over_union(converted_current_bbox, converted_ground_truth_bbox) >= IOU:
                     counter_bbox_heli += 1
                     if DISPLAY_FEED == '001':  # Display positive bbox found in GREEN
                         cv2.putText(current_frame, "heli", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, GREEN, 2)
@@ -487,7 +496,8 @@ def main():
 
             # X. Save frames & track KPI
             # The deque has a maxlen of residualConnections so the first-in will pop
-            previous_gray_frame.append(current_gray_frame)
+            gray_frame_to_append = vs2[frame_number] if FLAG_GRAY_SCALE else cv2.cvtColor(vs2[frame_number], cv2.COLOR_BGR2GRAY)
+            previous_gray_frame.append(gray_frame_to_append)
             nb_bbox.append([len(cnts), large_box, counter_bbox_heli, 1 if counter_bbox_heli else 0])
 
             fps.update()
@@ -602,8 +612,8 @@ def main():
 if __name__ == '__main__':
 
     ap = argparse.ArgumentParser()  #
-    # ap.add_argument("-v", "--video", help="path to the video file", required=True)
-    # ap.add_argument("-bb", "--bounding_boxes", type=str, help="path to ground truth bounding boxes", required=True)
+    #ap.add_argument("-v", "--video", help="path to the video file", required=True)
+    #ap.add_argument("-bb", "--bounding_boxes", type=str, help="path to ground truth bounding boxes", required=True)
     ap.add_argument("-bp", "--best_params", action='store_true', help="Display best overall/best precision/best recall")
     ap.add_argument("-r", "--restart", type=int, help="iteration restart")
     args = vars(ap.parse_args())
@@ -611,14 +621,16 @@ if __name__ == '__main__':
     # ------------------
     # Path constructions
     # ------------------
-    # VIDEO_STREAM_PATH = args["video"]
-    # PATH_BBOX = args["bounding_boxes"]
+    #VIDEO_STREAM_PATH = args["video"]
+    #PATH_BBOX = args["bounding_boxes"]
     # DISPLAY_BEST_PARAMS = args["best_params"]
     VIDEO_STREAM_PATH = '/home/alex/Desktop/Helico/0_Database/RPi_import/' \
-                        '190624_200747/190624_200747_helico_1920x1080_45s_25fps_FB.mp4'
+                        '190622_201853/190622_201853_helico_1920x1080_45s_25fps_L.mp4'
+
     PATH_BBOX = '/home/alex/Desktop/Helico/0_Database/RPi_import/' \
-                '190624_200747/190624_200747_extrapolatedBB.pickle'
-    DISPLAY_BEST_PARAMS = False
+                '190622_201853/190622_201853_extrapolatedBB.pickle'
+
+    DISPLAY_BEST_PARAMS = True
 
     # Need to change the PATH_ALL_RESULTS name
     FOLDER_PATH = os.path.split(VIDEO_STREAM_PATH)[0]
@@ -642,5 +654,6 @@ if __name__ == '__main__':
     FLAG_PHASE_CORRELATION = False  # This is too slow (>3x slower than mgp)
     FLAG_OPTICAL_FLOW = False  # A bit better, but still way too slow
     FLAG_DISPLAY_TIMING = False
+    FLAG_GRAY_SCALE = True
 
     main()
