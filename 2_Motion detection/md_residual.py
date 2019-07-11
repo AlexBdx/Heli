@@ -15,38 +15,10 @@ import os
 import psutil
 from sklearn.model_selection import ParameterGrid
 import pickle
-
-# Handle unittest access
-if __name__ == '__main__':
-    import imageStabilizer
-else:
-    from . import imageStabilizer
+import video_tools as vt
 
 
 # 0. DECLARATIONS
-def check_ram_use():
-    """
-    Check and display the current RAM used by the script.
-    :return: void
-    """
-    pid = os.getpid()
-    py = psutil.Process(pid)
-    memory_use = py.memory_info()[0]
-    # print('RAM use: ', memory_use)
-    return memory_use
-
-
-def centered_bbox(bbox):
-    """
-    Returns a centered bbox
-    :param bbox: original bounding box
-    :return: x, y are replaced by xc, yc
-    """
-    (x, y, w, h) = bbox
-    (xc, yc) = (x + w // 2, y + h // 2)
-    return xc, yc, w, h
-
-
 def show_feed(s, thresh_feed, delta_frame, current_frame):
     """
     Selectively show the different layers of the image processing.
@@ -64,65 +36,6 @@ def show_feed(s, thresh_feed, delta_frame, current_frame):
         cv2.imshow("Security Feed", current_frame)
 
 
-def import_stream(video_stream_path=None, verbose=False):
-    """
-    Connect to /dev/video0 or a given file.
-    :param video_stream_path:
-    :param verbose: more prints
-    :return: stream, nb frames, width, height
-    """
-    # if the video argument is None, then we are reading from webcam
-    if video_stream_path is None:
-        video_stream = cv2.VideoCapture("/dev/video0")
-        time.sleep(2.0)
-    # otherwise, we are reading from a video file
-    else:
-        video_stream = cv2.VideoCapture(video_stream_path)
-
-    # Stream properties
-    nb_frames = int(video_stream.get(cv2.CAP_PROP_FRAME_COUNT))
-    # Get width and height of video stream
-    frame_width = int(video_stream.get(cv2.CAP_PROP_FRAME_WIDTH))
-    frame_height = int(video_stream.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    if verbose:
-        print("[INFO] Imported {} frames with shape x-{} y-{}".format(nb_frames, frame_width, frame_height))
-    return video_stream, nb_frames, frame_width, frame_height
-
-
-def cache_video(video_stream, method, gray_scale=False):
-    """
-    Loads in RAM a video_stream as a list or numpy array.
-    :param video_stream: the local video file to cache
-    :param method: currently, numpy array or list
-    :param gray_scale: When True loads all the data as gray images
-    :return: the cached video
-    """
-    nb_frames = int(video_stream.get(cv2.CAP_PROP_FRAME_COUNT))
-    # Get width and height of video stream
-    frame_width = int(video_stream.get(cv2.CAP_PROP_FRAME_WIDTH))
-    frame_height = int(video_stream.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    # Populate a numpy array
-    if method == 'numpy':
-        vs_cache = np.zeros((nb_frames, frame_height, frame_width, 3), dtype=np.uint8)
-        for i in range(nb_frames):
-            frame = video_stream.read()[1]
-            vs_cache[i] = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if gray_scale else frame
-    # Appends the frames in a list
-    elif method == 'list':
-        vs_cache = []
-        while True:
-            frame = video_stream.read()[1]
-            if frame is not None:
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if gray_scale else frame
-                vs_cache.append(frame)
-            else:
-                break
-    else:
-        raise TypeError('This caching method is not supported')
-    print("[INFO] Cached {} frames with shape x-{} y-{}".format(nb_frames, frame_width, frame_height))
-    return vs_cache
-
-
 def create_log(path, params):
     """
     Create a new log for this optimization run
@@ -138,58 +51,7 @@ def create_log(path, params):
         w.writerow(new_header)
         print("Log header is now ", new_header)
     return new_header
-
-
-def import_bbox_heli(heli_bb_file):
-    """
-    Read the pickle files containing the known location of the helicopter in the form of bb.
-    :param heli_bb_file:
-    :return: dict {frame: bbox tuple, ...}
-    """
-    with open(heli_bb_file, 'rb') as f:
-        # r = csv.reader(f, delimiter=';')
-        bbox_heli_ground_truth = pickle.load(f)
-    return bbox_heli_ground_truth
-
-
-def xywh_to_x1y1x2y2(bbox):
-    """
-    Convert a bounding box in the (x, y, w, h) format to the (x1, y1, x2, y2) format
-    :param bbox: Bounding box
-    :return: Converted bounding box
-    """
-    return bbox[0], bbox[1], bbox[0] + bbox[2], bbox[1] + bbox[3]
-
-
-def bb_intersection_over_union(box_a, box_b):
-    """
-    Calculates IoU (Intersection over Union) for two boxes.
-    Bounding boxes have to be submitted in the (x1, y1, x2, y2) format
-    :param box_a: bounding box (order irrelevant)
-    :param box_b: bounding box (order irrelevant)
-    :return: 0 <= score <= 1
-    """
-    xa = max(box_a[0], box_b[0])
-    ya = max(box_a[1], box_b[1])
-    xb = min(box_a[2], box_b[2])
-    yb = min(box_a[3], box_b[3])
     
-    # compute the area of intersection rectangle
-    inter_area = max(0, xb - xa) * max(0, yb - ya)
-    
-    # compute the area of both the prediction and ground-truth
-    # rectangles
-    box_a_area = (box_a[2] - box_a[0]) * (box_a[3] - box_a[1])
-    box_b_area = (box_b[2] - box_b[0]) * (box_b[3] - box_b[1])
-    
-    # compute the intersection over union by taking the intersection
-    # area and dividing it by the sum of prediction + ground-truth
-    # areas - the intersection area
-    iou = inter_area / (box_a_area + box_b_area - inter_area)
-    
-    # return the intersection over union value
-    return iou
-
 
 def main():
     """
@@ -208,7 +70,7 @@ def main():
         iteration_dict = [best_params, best_recall, best_precision]  # Matches the dump order
     else:
         params = {
-            'gaussWindow': range(3, 8, 2),
+            'gaussWindow': range(1, 8, 2),
             'residualConnections': range(1, 8, 2),
             'sigma': np.linspace(0.1, 0.9, 5),
             'dilationIterations': range(1, 8, 2),
@@ -224,8 +86,8 @@ def main():
         header = create_log(PATH_ALL_RESULTS, params)
         iteration_dict = ParameterGrid(params)
 
-    video_stream, nb_frames, frame_width, frame_height = import_stream(VIDEO_STREAM_PATH)
-    bbox_heli_ground_truth = import_bbox_heli(PATH_BBOX)  # Creates a dict
+    video_stream, nb_frames, frame_width, frame_height = vt.init.import_stream(VIDEO_STREAM_PATH)
+    bbox_heli_ground_truth = vt.bbox.import_bbox_heli(PATH_BBOX)  # Creates a dict
 
     # Min/Max area for the helicopter detection.
     # Min is difficult: it could be as small as a speck in the distance
@@ -251,7 +113,7 @@ def main():
     highest_f1_score = 0
     highest_recall = 0
     highest_precision = 0
-    vs2 = cache_video(video_stream, 'list', gray_scale=FLAG_GRAY_SCALE)
+    vs2 = vt.init.cache_video(video_stream, 'list', gray_scale=FLAG_GRAY_SCALE)
     for sd in tqdm.tqdm(iteration_dict):
         # -------------------------------------
         # 1. RESET THE SIM DEPENDENT VARIABLES
@@ -403,6 +265,7 @@ def main():
             # dilate the thresholded image to fill in holes, then find contours
             if sd['diffMethod'] == 0:
                 diff_frame = cv2.dilate(diff_frame, None, iterations=sd['dilationIterations'])
+                diff_frame = cv2.erode(diff_frame, None, iterations=sd['dilationIterations'])
             elif sd['diffMethod'] == 1:
                 diff_frame = cv2.morphologyEx(diff_frame, cv2.MORPH_OPEN, None)
 
@@ -446,24 +309,24 @@ def main():
                 # That data was obtained by running a CSRT TRACKER on the helico
 
                 # Classify bboxes based on their IOU with ground truth
-                converted_current_bbox = xywh_to_x1y1x2y2((x, y, w, h))
-                converted_ground_truth_bbox = xywh_to_x1y1x2y2((x_gt, y_gt, w_gt, h_gt))
-                if bb_intersection_over_union(converted_current_bbox, converted_ground_truth_bbox) >= IOU:
+                converted_current_bbox = vt.bbox.xywh_to_x1y1x2y2((x, y, w, h))
+                converted_ground_truth_bbox = vt.bbox.xywh_to_x1y1x2y2((x_gt, y_gt, w_gt, h_gt))
+                if vt.bbox.intersection_over_union(converted_current_bbox, converted_ground_truth_bbox) >= IOU:
                     counter_bbox_heli += 1
-                    if DISPLAY_FEED == '001':  # Display positive bbox found in GREEN
-                        cv2.putText(current_frame, "heli", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, GREEN, 2)
-                        cv2.rectangle(current_frame, (x, y), (x + w, y + h), GREEN, 2)
+                    if DISPLAY_FEED == '001':  # Display positive bbox found in COLOR['GREEN']
+                        cv2.putText(current_frame, "heli", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR['GREEN'], 2)
+                        cv2.rectangle(current_frame, (x, y), (x + w, y + h), COLOR['GREEN'], 2)
                 else:
-                    if DISPLAY_FEED == '001':  # Display negative bbox found in BLUE
-                        cv2.putText(current_frame, "not heli", (x, y + h + 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, BLUE, 2)
-                        cv2.rectangle(current_frame, (x, y), (x + w, y + h), BLUE, 2)
+                    if DISPLAY_FEED == '001':  # Display negative bbox found in COLOR['BLUE']
+                        cv2.putText(current_frame, "not heli", (x, y + h + 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR['BLUE'], 2)
+                        cv2.rectangle(current_frame, (x, y), (x + w, y + h), COLOR['BLUE'], 2)
                     pass
 
             # C. Generate a square BB
-            # cv2.rectangle(current_frame, (x, y), (x + s, y + s), GREEN, 2)
-            # cv2.rectangle(current_frame, (x, y), (x + w, y + h), GREEN, 2)
+            # cv2.rectangle(current_frame, (x, y), (x + s, y + s), COLOR['GREEN'], 2)
+            # cv2.rectangle(current_frame, (x, y), (x + w, y + h), COLOR['GREEN'], 2)
             if DISPLAY_FEED == '001':
-                cv2.rectangle(current_frame, (x_gt, y_gt), (x_gt + w_gt, y_gt + h_gt), RED, 2)
+                cv2.rectangle(current_frame, (x_gt, y_gt), (x_gt + w_gt, y_gt + h_gt), COLOR['RED'], 2)
             t9 = time.perf_counter()
 
             # VIII. draw the text and timestamp on the current_frame
@@ -479,13 +342,13 @@ def main():
                         raise ValueError('There should only be 3 best results in the best_param log file')
                     cv2.putText(current_frame, "Current run: {} - f1_score: {:.3f} - recall: {:.3f} - precision: {:.3f}"
                                 .format(run, sd['f1_score'], sd['recall'], sd["precision"]),
-                                (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, RED, 2)
+                                (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR['RED'], 2)
 
                 cv2.putText(current_frame, "BBoxes: {} found, {} heliBox"
                             .format(len(cnts), counter_bbox_heli),
-                            (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, RED, 2)
+                            (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR['RED'], 2)
                 # cv2.putText(current_frame, datetime.datetime.now().strftime("%A %d %B %Y %I:%M:%S%p"), (10, 30),
-                # cv2.FONT_HERSHEY_SIMPLEX, 0.5, RED, 1) # Shows current date/time
+                # cv2.FONT_HERSHEY_SIMPLEX, 0.5, COLOR['RED'], 1) # Shows current date/time
 
                 # IX. show the current_frame and record if the user presses a key
                 show_feed(DISPLAY_FEED, thresh_feed, delta_frame, current_frame)
@@ -569,7 +432,8 @@ def main():
         # Display best params or append best results to log
         if DISPLAY_BEST_PARAMS:
             counter_best_params += 1
-            print(sd)
+            # print(sd)  # Possible to limit digits?
+            print('gaussWindow: {}, residualConnections: {}, sigma: {:.1f}, dilationIterations: {}, precision: {:.3f}, recall: {:.3f}, f1_Score: {:.3f}'.format(sd['gaussWindow'], sd['residualConnections'], sd['sigma'], sd['dilationIterations'], sd['precision'], sd['recall'], sd['f1_score']))  # Possible to limit digits?
         else:
             # Output results - parameters+kpis
             kpis = [average_fps, avg_nb_boxes, avg_nb_filtered_boxes, avg_nb_heli_bbox,
@@ -612,8 +476,8 @@ def main():
 if __name__ == '__main__':
 
     ap = argparse.ArgumentParser()  #
-    #ap.add_argument("-v", "--video", help="path to the video file", required=True)
-    #ap.add_argument("-bb", "--bounding_boxes", type=str, help="path to ground truth bounding boxes", required=True)
+    ap.add_argument("-v", "--video", help="path to the video file", required=True)
+    ap.add_argument("-bb", "--bounding_boxes", type=str, help="path to ground truth bounding boxes", required=True)
     ap.add_argument("-bp", "--best_params", action='store_true', help="Display best overall/best precision/best recall")
     ap.add_argument("-r", "--restart", type=int, help="iteration restart")
     args = vars(ap.parse_args())
@@ -621,14 +485,14 @@ if __name__ == '__main__':
     # ------------------
     # Path constructions
     # ------------------
-    #VIDEO_STREAM_PATH = args["video"]
-    #PATH_BBOX = args["bounding_boxes"]
+    VIDEO_STREAM_PATH = args["video"]
+    PATH_BBOX = args["bounding_boxes"]
     # DISPLAY_BEST_PARAMS = args["best_params"]
-    VIDEO_STREAM_PATH = '/home/alex/Desktop/Helico/0_Database/RPi_import/' \
-                        '190622_201853/190622_201853_helico_1920x1080_45s_25fps_L.mp4'
+    #VIDEO_STREAM_PATH = '/home/alex/Desktop/Helico/0_Database/RPi_import/' \
+    #                    '190622_201853/190622_201853_helico_1920x1080_45s_25fps_L.mp4'
 
-    PATH_BBOX = '/home/alex/Desktop/Helico/0_Database/RPi_import/' \
-                '190622_201853/190622_201853_extrapolatedBB.pickle'
+    #PATH_BBOX = '/home/alex/Desktop/Helico/0_Database/RPi_import/' \
+    #            '190622_201853/190622_201853_extrapolatedBB.pickle'
 
     DISPLAY_BEST_PARAMS = True
 
@@ -647,9 +511,7 @@ if __name__ == '__main__':
     # BBOX_ERROR is max error ratio to count a bbox as matching ground truth
     # This applies to all axis (xc, yc, w, h)
     IOU = 0.5
-    RED = (0, 0, 255)
-    GREEN = (0, 255, 0)
-    BLUE = (255, 0, 0)
+    COLOR = {'WHITE': (255, 255, 255), 'BLUE': (255, 0, 0), 'GREEN': (0, 255, 0), 'RED': (0, 0, 255), 'BLACK': (0, 0, 0)}
     PADDING = 10  # px
     FLAG_PHASE_CORRELATION = False  # This is too slow (>3x slower than mgp)
     FLAG_OPTICAL_FLOW = False  # A bit better, but still way too slow

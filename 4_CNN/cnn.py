@@ -1,20 +1,13 @@
-# from imutils.video import video_stream
-from imutils.video import FPS
 import argparse
-import imutils
 import time
-import cv2
 import numpy as np
-import tqdm
-import csv
-import collections
-import tqdm
 import glob
 import os
 import psutil
-from sklearn.model_selection import ParameterGrid
-import pickle
 import tensorflow as tf
+import tensorflow.keras as k
+from matplotlib.image import imread, imsave
+
 
 def check_ram_use():
     """
@@ -32,47 +25,66 @@ def benchmark_model(model, list_path):
     # Use the model to run a few predictions and make sure the accuracy is there
     print("Loading the images in RAM")
     X = []
-    for index, img in enumerate(tqdm.tqdm(list_path)):
-        if index%250 == 0:
-            print(check_ram_use())
+    Y_predict = []
+    for index, img in enumerate(list_path):
         image = imread(img)/127.5 - 1
         X.append(image)
-    for img_array in X:
-        Y_predict.append(model.predict(img_array))
-    return Y_predict
+    X = np.array(X)  # Make it 4 D
+    return model.predict(X)
 
 
 def main():
     # load json and create model
-    json_file = open('model.json', 'r')
+    json_file = open(PATH_ARCHITECTURE, 'r')
     loaded_model_json = json_file.read()
     json_file.close()
-    loaded_model = model_from_json(loaded_model_json)
+    loaded_model = k.models.model_from_json(loaded_model_json)
     # load weights into new model
-    loaded_model.load_weights("model.h5")
+    loaded_model.load_weights(PATH_WEIGHTS)
     print("Loaded model from disk")
     
-    # Get some pictures to benchmark
-    root = 'DATA/RPi_import/'
-    method = 'cropsResizedToNn'
-    #folder_name = ['190622_201853', '190622_202211', '190624_200747', '190622_234007']
-    folder_name = ['190622_201853', '190622_202211', '190622_234007']
     inputPos = []
     inputNeg = []
-    for folder in folder_name:
-        inputPos += [f for f in glob.glob(root+folder+'/'+folder+'_NN_crops/'+method+'/*.jpg')]
+    for folder in FOLDER_NAME:
+        inputPos += [f for f in glob.glob(PATH_IMAGES+folder+'/'+folder+'_NN_crops/'+METHOD+'/*.jpg')]
 
-    for folder in folder_name:
-        inputNeg += [f for f in glob.glob(root+folder+'/'+folder+'_NN_crops/Negatives/*.jpg')]
+    for folder in FOLDER_NAME:
+        inputNeg += [f for f in glob.glob(PATH_IMAGES+folder+'/'+folder+'_NN_crops/Negatives/*.jpg')]
     list_benchmark = inputPos+inputNeg
-    
-    nb_img = 250
+    print(len(list_benchmark))
+    nb_images = 5
     indexes = np.random.permutation(len(list_benchmark))
     random_images = [list_benchmark[i] for i in indexes[:nb_images]]
     t0 = time.perf_counter()
     benchmark_model(loaded_model, random_images)
     t1 = time.perf_counter()
-    print("Infered {} images in {:.3f} s ({:.3f}/s)".format(nb_img, t1-t0, nb_img/(t1-t0)))
+    print("Infered {} images in {:.3f} s ({:.3f} images/s)".format(nb_images, t1-t0, nb_images/(t1-t0)))
+    for i in range(10):
+        index = np.random.randint(len(list_benchmark))
+        single_image = np.array(imread(list_benchmark[index]), dtype=np.float64)/127.5 - 1
+        single_image = single_image[np.newaxis, ...]
+        t2 = time.perf_counter()
+        loaded_model.predict(single_image)
+        t3 = time.perf_counter()
+        print("[np.float64] Infered 1 image in {:.3f} s ({:.3f} images/s)".format(t3-t2, 1/(t3-t2)))
+    print()
+    for i in range(10):
+        index = np.random.randint(len(list_benchmark))
+        single_image = np.array(imread(list_benchmark[index]), dtype=np.float32)/127.5 - 1
+        single_image = single_image[np.newaxis, ...]
+        t2 = time.perf_counter()
+        loaded_model.predict(single_image)
+        t3 = time.perf_counter()
+        print("[np.float32] Infered 1 image in {:.3f} s ({:.3f} images/s)".format(t3-t2, 1/(t3-t2)))
+    print()
+    for i in range(10):
+        index = np.random.randint(len(list_benchmark))
+        single_image = np.array(imread(list_benchmark[index]), dtype=np.float16)/127.5 - 1
+        single_image = single_image[np.newaxis, ...]
+        t2 = time.perf_counter()
+        loaded_model.predict(single_image)
+        t3 = time.perf_counter()
+        print("[np.float16] Infered 1 image in {:.3f} s ({:.3f} images/s)".format(t3-t2, 1/(t3-t2)))
 
 
 if __name__ == '__main__':
@@ -81,5 +93,13 @@ if __name__ == '__main__':
     ap.add_argument("-m", "--model", type=str, help="model architecture", required=True)
     ap.add_argument("-w", "--weights", type=str, help="model weights", required=True)
     args = vars(ap.parse_args())
+    PATH_ARCHITECTURE = args["model"]
+    PATH_WEIGHTS = args["weights"]
+    
+        # Get some pictures to benchmark
+    PATH_IMAGES = '/home/alex/Desktop/Helico/0_Database/RPi_import/'
+    METHOD = 'cropsResizedToNn'
+    #FOLDER_NAME = ['190622_201853', '190622_202211', '190624_200747', '190622_234007']
+    FOLDER_NAME = ['190622_201853', '190622_202211', '190622_234007']
     
     main()
