@@ -3,26 +3,29 @@ import cv2
 import numpy as np
 import subprocess as sp
 
-def clean_crop_directory(path_crop_folder):
-    # path_crop_folder is a str
+def clean_crop_directory(path_folder):
+    # path_folder is an absolute path str
     
-    # Delete crop folder and recreate an empty structure
-    delete_crop_folder = ['rm', '-r', path_crop_folder]
-    sp.run(delete_crop_folder)
+    # Delete crop folder if it exists
+    timestamp = os.path.split(path_folder)[1]
+    path_crop_folder = os.path.join(path_folder, timestamp+'_NN_crops')
+    if os.path.isdir(path_crop_folder):
+        delete_crop_folder = ['rm', '-r', path_crop_folder]
+        sp.run(delete_crop_folder)
     
-    # Rebuild
-    aug = os.join(path_crop_folder, 'Augmented_data')
-    extracted = os.join(path_crop_folder, 'Extracted_helicopters')
-    negatives = os.join(path_crop_folder, 'Negatives')
-    crops_1 = os.join(path_crop_folder, 'cropsResizedToNn')
-    crops_2 = os.join(path_crop_folder, 'nnSizeCrops')
+    # Rebuild the folder structure
+    aug = os.path.join(path_crop_folder, 'Augmented_data')
+    extracted = os.path.join(path_crop_folder, 'Extracted_helicopters')
+    negatives = os.path.join(path_crop_folder, 'Negatives')
+    crops_1 = os.path.join(path_crop_folder, 'cropsResizedToNn')
+    crops_2 = os.path.join(path_crop_folder, 'nnSizeCrops')
     
-    sp.run('mkdir', path_crop_folder)
-    sp.run('mkdir', aug)
-    sp.run('mkdir', extracted)
-    sp.run('mkdir', negatives)
-    sp.run('mkdir', crops_1)
-    sp.run('mkdir', crops_2)
+    sp.run(['mkdir', path_crop_folder])
+    sp.run(['mkdir', aug])
+    sp.run(['mkdir', extracted])
+    sp.run(['mkdir', negatives])
+    sp.run(['mkdir', crops_1])
+    sp.run(['mkdir', crops_2])
 
 
 def nn_size_crop(crop, window_size, bbox_center, frame_shape):

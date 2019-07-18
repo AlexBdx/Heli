@@ -147,7 +147,7 @@ def main():
         bbox_heli_ground_truth = pickle.load(f)
 
     # Rebuild the crop directory
-    vt.crop.clean_crop_directory()
+    vt.crop.clean_crop_directory(PATH_FOLDER)
 
     # IV.2.2 Replay the video and save the crops to file
     counter_crop = 0  # Used to increment picture name
@@ -183,7 +183,7 @@ def main():
                 out_path = os.path.join(PATH_CROP_RESIZED_TO_NN, TIMESTAMP+str(counter_crop)+'.jpg')
                 cv2.imwrite(out_path, crop)
                 # IV.2.2.3 Create a negative image - no helico
-                crop = crop_negative(frame, NN_SIZE, (xc, yc))
+                crop = vt.crop.crop_negative(frame, NN_SIZE, (xc, yc))
                 out_path = os.path.join(PATH_NEGATIVES, TIMESTAMP+str(counter_crop)+'.jpg')
                 cv2.imwrite(out_path, crop)
                 # Increment crop counter
@@ -211,10 +211,10 @@ if __name__ == '__main__':
     args = vars(ap.parse_args())
 
     PATH_VIDEO = args["video"]
-    VIDEO_FOLDER = os.path.split(PATH_VIDEO)[0]
+    PATH_FOLDER = os.path.split(PATH_VIDEO)[0]
     TIMESTAMP = os.path.split(PATH_VIDEO)[1][:14]
-    PATH_SOURCE_BBOX = os.path.join(VIDEO_FOLDER, TIMESTAMP+"sourceBB.pickle")
-    PATH_EXTRAPOLATED_BBOX = os.path.join(VIDEO_FOLDER, TIMESTAMP+"extrapolatedBB.pickle")
+    PATH_SOURCE_BBOX = os.path.join(PATH_FOLDER, TIMESTAMP+"sourceBB.pickle")
+    PATH_EXTRAPOLATED_BBOX = os.path.join(PATH_FOLDER, TIMESTAMP+"extrapolatedBB.pickle")
     PATH_CROP_FOLDER = os.path.join(os.path.split(PATH_VIDEO)[0], TIMESTAMP+'NN_crops')
     PATH_CROPS_NN_SIZE = os.path.join(PATH_CROP_FOLDER, 'nnSizeCrops')
     PATH_CROP_RESIZED_TO_NN = os.path.join(PATH_CROP_FOLDER, 'cropsResizedToNn')
