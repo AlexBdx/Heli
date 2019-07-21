@@ -1,0 +1,6 @@
+Method: model_nnSizeCrops
+This model now features a standard scaler to process the input.
+[INFO] Accuracy on 190720_210148 is 91.8 %
+[INFO] Accuracy on 190720_212410 is 98.0 %
+[INFO] Accuracy on 190720_213926 is 97.7 %
+[INFO] Accuracy on 190720_214342 is 98.6 %

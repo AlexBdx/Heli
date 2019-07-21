@@ -185,7 +185,7 @@ def main(folder):
         crop = frame[y_start:y_end, x_start:x_end]
         crop = vt.crop.nn_size_crop(crop, NN_SIZE, (xc, yc), frame.shape)
         path_output = os.path.join(PATH_CROPS_NN_SIZE, str(frame_number)+EXT)
-        #assert crop.dtype==np.uint8
+        assert crop.dtype==np.uint8
         cv2.imwrite(path_output, crop)
         t3 = time.perf_counter()
         # IV.2.2.2 Second option: (square) bbox crop resized to NN_SIZE
@@ -200,15 +200,15 @@ def main(folder):
         # Then only we resize to NN_SIZE
         crop = cv2.resize(crop, NN_SIZE)  # Resize to NN input size
         path_output = os.path.join(PATH_CROP_RESIZED_TO_NN, str(frame_number)+EXT)
-        #assert crop.dtype==np.uint8
+        assert crop.dtype==np.uint8
         cv2.imwrite(path_output, crop)
         t4 = time.perf_counter()
         # IV.2.2.3 Create a negative image - no helico
         for _ in range(NEGATIVE_PER_FRAME):
             crop = vt.crop.crop_negative(frame, NN_SIZE, (xc, yc))
             path_output = os.path.join(PATH_NEGATIVES, str(counter_negative)+EXT)
-            #assert crop.dtype==np.uint8
             #t0 = time.perf_counter()
+            assert crop.dtype==np.uint8
             cv2.imwrite(path_output, crop)
             #t1 = time.perf_counter()
             #timing.append(t1-t0)
@@ -235,6 +235,7 @@ def main(folder):
         if extracted_area:
             list_max_area.append(extracted_area)
             path_output = os.path.join(PATH_EXTRACTED, str(index)+EXT)
+            assert extracted_image.dtype==np.uint8
             cv2.imwrite(path_output, extracted_image)
         #else:
             #print("[WARNING] extracted_area = 0, skipping this extraction ({}.png)".format(index))
@@ -260,6 +261,7 @@ def main(folder):
             Y_labels.append(['Negative', 'None'])
         #blended_image = cv2.cvtColor(blended_image, cv2.COLOR_RGB2BGR)
         path_output = os.path.join(PATH_AUGMENTED, str(count)+EXT)
+        assert blended_image.dtype==np.uint8
         cv2.imwrite(path_output, blended_image)
     
     # Output labels to a file
