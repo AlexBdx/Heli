@@ -52,7 +52,7 @@ def main(folder):
     #STRIDE = 25  # Number of frames with bbox to skip
     NEGATIVE_PER_FRAME = 1  # int >= 1, amount of negative per frame.
     NN_SIZE = (224, 224)  # Should be guess by the NN but anyway
-    EXT = '.png'
+    
     TOTAL_COUNT = 100  # Number of images to create per folder
     HELICO_FREQUENCY = 0.5
     # Normal distributions
@@ -130,7 +130,7 @@ def main(folder):
     #----------------------------------------------------
             
     # Rebuild the crop folders
-    vt.crop.clean_crop_directory(PATH_FOLDER)
+    vt.bbox.clean_crop_directory(PATH_FOLDER)
     
     
     video_stream, nb_frames, frame_width, frame_height = vt.init.import_stream(PATH_VIDEO)
@@ -138,14 +138,20 @@ def main(folder):
 
     
     # Rebuild the crops
-    first_bbox = min(bbox_heli_ground_truth.keys())
-    last_bbox = max(bbox_heli_ground_truth.keys())
+    try:
+        first_bbox = min(bbox_heli_ground_truth.keys())
+        last_bbox = max(bbox_heli_ground_truth.keys())
+    except ValueError:
+        print("[ERROR] No bbox found in {}.Skipping folder".format(TIMESTAMP))
+        raise  # Skipping
+    
     print("[INFO] Using bbox frames {} to {}".format(first_bbox, last_bbox))
     
     # Start going through the frames
     counter_negative = 0
     bbox_crops = dict()
     timing = []
+    
     for frame_number in range(nb_frames):
         t0 = time.perf_counter()
         frame = video_stream.read()[1] # No cache
@@ -170,106 +176,96 @@ def main(folder):
             break
         
         # Ground Truth data
-        x_gt, y_gt, w_gt, h_gt = bbox_heli_ground_truth[frame_number]  # frame id
-        bbox_crops[frame_number] = frame[y_gt:y_gt+h_gt, x_gt:x_gt+w_gt]  # Store bbox crop
-        
-        xc, yc = x_gt + w_gt//2, y_gt + h_gt//2
         t2 = time.perf_counter()
-        # IV.2.2 Cropping - populate both folders
-        # IV.2.2.1 First option: NN_SIZE crop
-        # Limit the size of the crop
-        x_start = max(0, xc - NN_SIZE[0]//2)
-        x_end = min(frame_width, xc + NN_SIZE[0]//2)
-        y_start = max(0, yc - NN_SIZE[1]//2)
-        y_end = min(frame_height, yc + NN_SIZE[1]//2)
-        crop = frame[y_start:y_end, x_start:x_end]
-        crop = vt.crop.nn_size_crop(crop, NN_SIZE, (xc, yc), frame.shape)
-        path_output = os.path.join(PATH_CROPS_NN_SIZE, str(frame_number)+EXT)
-        assert crop.dtype==np.uint8
-        cv2.imwrite(path_output, crop)
-        t3 = time.perf_counter()
-        # IV.2.2.2 Second option: (square) bbox crop resized to NN_SIZE
-        w, h = NN_SIZE
-        s = max(w, h) if max(w, h) % 2 == 0 else max(w, h) + 1  # even only
-        x_start = max(0, xc - s//2)
-        x_end = min(frame_width, xc + s//2)
-        y_start = max(0, yc - s//2)
-        y_end = min(frame_height, yc + s//2)
-        crop = frame[y_start:y_end, x_start:x_end]
-        crop = vt.crop.nn_size_crop(crop, (s, s), (xc, yc), frame.shape)  # pad to (s, s)
-        # Then only we resize to NN_SIZE
-        crop = cv2.resize(crop, NN_SIZE)  # Resize to NN input size
-        path_output = os.path.join(PATH_CROP_RESIZED_TO_NN, str(frame_number)+EXT)
-        assert crop.dtype==np.uint8
-        cv2.imwrite(path_output, crop)
-        t4 = time.perf_counter()
-        # IV.2.2.3 Create a negative image - no helico
-        for _ in range(NEGATIVE_PER_FRAME):
-            crop = vt.crop.crop_negative(frame, NN_SIZE, (xc, yc))
-            path_output = os.path.join(PATH_NEGATIVES, str(counter_negative)+EXT)
-            #t0 = time.perf_counter()
-            assert crop.dtype==np.uint8
-            cv2.imwrite(path_output, crop)
-            #t1 = time.perf_counter()
-            #timing.append(t1-t0)
-            counter_negative += 1
-        t5 = time.perf_counter()
-            #assert 1==0
-    # Augment the data after all the pos/pos/neg have been created
-    # List all the pictures & read info file
-    #images = sorted([img for img in glob.glob(PATH_POSITIVE+'/*')])
-    #print("[INFO] Writing negatives to file:", np.mean(timing))
-    negative_images = sorted([img for img in glob.glob(PATH_NEGATIVES+'/*')])
+        (x, y, w, h) = bbox_heli_ground_truth[frame_number]
+        xc, yc = x + w//2, y + h//2
+        bbox_crops[frame_number] = frame[y:y+h, x:x+w]  # Store bbox crop
 
-    # Create the extractor object
-    extractor = vt.extract.extractor(BLUR, CANNY_THRESH_1, CANNY_THRESH_2, MASK_DILATE_ITER, MASK_ERODE_ITER)
-    
-    # Generate the extracted helicopter pictures
-    timing = []
-    list_max_area = []
-    Y_labels = []
-    #for index, img in enumerate(images):  # Skip STRIDE to output less helico
-    for index, img_array in bbox_crops.items():
-        #img_array = cv2.imread(img, cv2.IMREAD_UNCHANGED)
-        extracted_area, extracted_image = extractor.extract_positive(img_array)  # Variable size
-        if extracted_area:
-            list_max_area.append(extracted_area)
-            path_output = os.path.join(PATH_EXTRACTED, str(index)+EXT)
-            assert extracted_image.dtype==np.uint8
-            cv2.imwrite(path_output, extracted_image)
-        #else:
-            #print("[WARNING] extracted_area = 0, skipping this extraction ({}.png)".format(index))
-    
-    # Blend with negative images
-    extracted_images = sorted([img for img in glob.glob(PATH_EXTRACTED+'/*')])
-    if len(extracted_images) == 0:
-        print("[WARNING] Skipping {} as no helico could be extracted with these params".format(PATH_FOLDER))
-        return
+        # Rebuild the different folders
+        crop_name = TIMESTAMP+'_'+str(frame_number)
+        if REBUILD_NN_SIZE_CROPS:
+            crop = vt.bbox.nn_size_crop(frame, (x, y, w, h), NN_SIZE)
+            out_path = os.path.join(PATH_CROPS_NN_SIZE, crop_name+EXT)
+            cv2.imwrite(out_path, crop, params=(cv2.IMWRITE_PNG_COMPRESSION, PNG_COMPRESSION))
+        if REBUILD_CROPS_RESIZE_TO_NN:
+            crop = vt.bbox.crop_resized_to_nn(frame, (x, y, w, h), NN_SIZE)
+            out_path = os.path.join(PATH_CROP_RESIZED_TO_NN, crop_name+EXT)
+            cv2.imwrite(out_path, crop, params=(cv2.IMWRITE_PNG_COMPRESSION, PNG_COMPRESSION))
+        if REBUILD_NEGATIVE:
+            type_negative_crop = np.random.random()
+            if type_negative_crop <= RATIO_NEGATIVE_ON_PATH:  # On trajectory crop
+                flag_success, crop = vt.bbox.on_trajectory_negative_crop(frame, (x, y, w, h), bbox_heli_ground_truth, NN_SIZE)
+                if not flag_success:
+                    print("[WARNING] In {} (frame: {}): failed taking negative on trajectory.".format(os.path.split(PATH_VIDEO)[1][:13], frame_number))
+                    crop = vt.bbox.random_negative_crop(frame, (x, y, w, h), NN_SIZE)
+                    on_path = 0
+                else:
+                    on_path = 1
+            else:
+                crop = vt.bbox.random_negative_crop(frame, (x, y, w, h), NN_SIZE)
+                on_path = 0
+            out_path = os.path.join(PATH_NEGATIVES, crop_name+'_'+str(on_path)+EXT)
+            cv2.imwrite(out_path, crop, params=(cv2.IMWRITE_PNG_COMPRESSION, PNG_COMPRESSION))
+                
+        t5 = time.perf_counter()
+
+    # Proceed to data augmentation
+    if REBUILD_AUGMENTED:
+        # Augment the data after all the pos/pos/neg have been created
+        # List all the pictures & read info file
+        #images = sorted([img for img in glob.glob(PATH_POSITIVE+'/*')])
+        #print("[INFO] Writing negatives to file:", np.mean(timing))
+        negative_images = sorted([img for img in glob.glob(PATH_NEGATIVES+'/*')])
+
+        # Create the extractor object
+        extractor = vt.extract.extractor(BLUR, CANNY_THRESH_1, CANNY_THRESH_2, MASK_DILATE_ITER, MASK_ERODE_ITER)
         
-    for count in range(TOTAL_COUNT):  # Control the number of total augmented images
-        random_neg_index = np.random.randint(len(negative_images))
-        neg_img_array = cv2.imread(negative_images[random_neg_index], cv2.IMREAD_UNCHANGED)
-        # Select a random positive image to blend with
-        random_crop_index = np.random.randint(len(extracted_images))
-        img_array = cv2.imread(extracted_images[random_crop_index], cv2.IMREAD_UNCHANGED)  # RGB 4 channels
+        # Generate the extracted helicopter pictures
+        timing = []
+        list_max_area = []
+        Y_labels = []
+        #for index, img in enumerate(images):  # Skip STRIDE to output less helico
+        for index, img_array in bbox_crops.items():
+            #img_array = cv2.imread(img, cv2.IMREAD_UNCHANGED)
+            extracted_area, extracted_image = extractor.extract_positive(img_array)  # Variable size
+            if extracted_area:
+                list_max_area.append(extracted_area)
+                path_output = os.path.join(PATH_EXTRACTED, str(index)+EXT)
+                assert extracted_image.dtype==np.uint8
+                cv2.imwrite(path_output, extracted_image, params=(cv2.IMWRITE_PNG_COMPRESSION, PNG_COMPRESSION))
+            #else:
+                #print("[WARNING] extracted_area = 0, skipping this extraction ({}.png)".format(index))
         
-        if np.random.rand() <= HELICO_FREQUENCY:
-            blended_image = extractor.blend_with_negative(neg_img_array, img_array, rotations=ROTATIONS, scaling=SCALING)
-            Y_labels.append(['Helicopter', info['Model']])
-        else:
-            blended_image = neg_img_array
-            Y_labels.append(['Negative', 'None'])
-        #blended_image = cv2.cvtColor(blended_image, cv2.COLOR_RGB2BGR)
-        path_output = os.path.join(PATH_AUGMENTED, str(count)+EXT)
-        assert blended_image.dtype==np.uint8
-        cv2.imwrite(path_output, blended_image)
+        # Blend with negative images
+        extracted_images = sorted([img for img in glob.glob(PATH_EXTRACTED+'/*')])
+        if len(extracted_images) == 0:
+            print("[WARNING] Skipping {} as no helico could be extracted with these params".format(PATH_FOLDER))
+            return
+            
+        for count in range(TOTAL_COUNT):  # Control the number of total augmented images
+            random_neg_index = np.random.randint(len(negative_images))
+            neg_img_array = cv2.imread(negative_images[random_neg_index], cv2.IMREAD_UNCHANGED)
+            # Select a random positive image to blend with
+            random_crop_index = np.random.randint(len(extracted_images))
+            img_array = cv2.imread(extracted_images[random_crop_index], cv2.IMREAD_UNCHANGED)  # RGB 4 channels
+            
+            if np.random.rand() <= HELICO_FREQUENCY:
+                blended_image = extractor.blend_with_negative(neg_img_array, img_array, rotations=ROTATIONS, scaling=SCALING)
+                Y_labels.append(['Helicopter', info['Model']])
+            else:
+                blended_image = neg_img_array
+                Y_labels.append(['Negative', 'None'])
+            #blended_image = cv2.cvtColor(blended_image, cv2.COLOR_RGB2BGR)
+            path_output = os.path.join(PATH_AUGMENTED, str(count)+EXT)
+            assert blended_image.dtype==np.uint8
+            cv2.imwrite(path_output, blended_image, params=(cv2.IMWRITE_PNG_COMPRESSION, PNG_COMPRESSION))
     
-    # Output labels to a file
-    path_output = os.path.join(PATH_AUGMENTED, TIMESTAMP+'_labels_aug.txt')
-    with open(path_output, 'w') as f:
-        out = csv.writer(f)
-        for label in Y_labels:
-            out.writerow(label)
+        # Output labels to a file
+        path_output = os.path.join(PATH_AUGMENTED, TIMESTAMP+'_labels_aug.txt')
+        with open(path_output, 'w') as f:
+            out = csv.writer(f)
+            for label in Y_labels:
+                out.writerow(label)
     
     print("[INFO] {} sucessfully rebuilt!".format(TIMESTAMP))
 
@@ -286,14 +282,23 @@ if __name__ == '__main__':
     PATH_IMAGES = '/home/alex/Desktop/Helico/0_Database/RPi_import'
     FOLDERS = [folder for folder in glob.glob(PATH_IMAGES+'/*') if os.path.isdir(folder) and os.path.split(folder)[1] != 'newVideo']
     FOLDERS = sorted(FOLDERS)
+    print("[INFO] Folders to rebuild:")
+    print(FOLDERS)
     #FOLDERS = [FOLDERS[1]]
     #FOLDERS = [FOLDERS[0], FOLDERS[1]]  # Override
     #print(FOLDERS)
-    FLAG_MULTIPROCESSING = False
+    RATIO_NEGATIVE_ON_PATH = 0.5  # (Nb of crops taken on trajectory)/(Nb random crops on the frame)
+    REBUILD_NN_SIZE_CROPS = True
+    REBUILD_CROPS_RESIZE_TO_NN = False
+    REBUILD_NEGATIVE = True
+    REBUILD_AUGMENTED = False
+    PNG_COMPRESSION = 1  # 0 to 9
+    EXT = '.png'
+    FLAG_MULTIPROCESSING = True
     if FLAG_MULTIPROCESSING:
         """[Activate multiprocessing]"""
         #processes = os.cpu_count()
-        processes = 4
+        processes = 2
         pool = mp.Pool(processes)
         print("Started a pool with {} workers".format(processes))
         print()

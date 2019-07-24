@@ -1,0 +1,3 @@
+This model was trained with the new negative pictures.
+50% of the negative pictures are random, 50% are from the trajectory itself.
+

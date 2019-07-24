@@ -71,7 +71,7 @@ def test_model_on_folder(model, root, method, extension='.png', verbose=False):
     X = []
     print("[INFO] Loading {} images in RAM".format(len(path_X)))
     with mp.Pool(os.cpu_count()) as pool:
-        X, Y, scalers = zip(*pool.starmap(preprocess_image, zip(path_X, Y, [DTYPE_IMAGES]*len(path_X))))
+        X, Y, scalers = zip(*pool.starmap(load_and_preprocess_image, zip(path_X, Y, [DTYPE_IMAGES]*len(path_X))))
     X = np.array(X, copy=False, dtype=DTYPE_IMAGES)
     Y = np.array(Y, copy=False, dtype=DTYPE_LABELS)
     
@@ -114,7 +114,7 @@ def test_model_on_folder(model, root, method, extension='.png', verbose=False):
     return accuracy
     
     
-def preprocess_image(path, label, dtype):
+def load_and_preprocess_image(path, label, dtype):
     # Applies a few transformations to an image to normalize the data
     # image: uint8 array
     # Returns a dtype array of processed image
@@ -129,6 +129,18 @@ def preprocess_image(path, label, dtype):
 
     #assert image.dtype==dtype  # Sanity check
     return image.astype(dtype), label, scaler
+    
+def preprocess_image(image, dtype):
+    # Simple, direct normalization without anything else
+    assert image.dtype == np.uint8
+    mean = np.mean(image)
+    deviation = np.std(image)
+    image = (image - mean)/deviation
+    #scaler = [mean, deviation]
+
+    #assert image.dtype==dtype  # Sanity check
+    return image.astype(dtype)
+    
     
 def invert_preprocessing(image, scaler):
     image = image*scaler[1] + scaler[0]

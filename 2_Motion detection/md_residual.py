@@ -46,8 +46,7 @@ def create_log(path, params):
     # Create a log and populate with the header. Wipes out previous logs with same name
     with open(path, 'w') as f:
         w = csv.writer(f)
-        new_header = list(params.keys()) + ["real_fps", "avg_nb_boxes", "avg_nb_filtered_boxes", "avg_nb_heli_bbox",
-                                            "precision", "recall", "f1_score"]
+        new_header = list(params.keys()) + ["iou", "real_fps", "avg_nb_boxes", "avg_nb_filtered_boxes", "avg_nb_heli_bbox", "precision", "recall", "f1_score"]
         w.writerow(new_header)
         print("Log header is now ", new_header)
     return new_header
@@ -436,7 +435,7 @@ def main():
             print('gaussWindow: {}, residualConnections: {}, sigma: {:.1f}, dilationIterations: {}, precision: {:.3f}, recall: {:.3f}, f1_Score: {:.3f}'.format(sd['gaussWindow'], sd['residualConnections'], sd['sigma'], sd['dilationIterations'], sd['precision'], sd['recall'], sd['f1_score']))  # Possible to limit digits?
         else:
             # Output results - parameters+kpis
-            kpis = [average_fps, avg_nb_boxes, avg_nb_filtered_boxes, avg_nb_heli_bbox,
+            kpis = [IOU, average_fps, avg_nb_boxes, avg_nb_filtered_boxes, avg_nb_heli_bbox,
                     precision, recall, f1_score]
             # Warning: they are both int array of the same length so they can be added!
             sim_output = [sd[k] for k in params.keys()] + list(kpis)
@@ -459,16 +458,28 @@ def main():
     # XII. Wrap-up the search & output some logs for quick review
     # XII.1. Save the best param after inputting the header
     if not DISPLAY_BEST_PARAMS:
+        create_log(PATH_BEST_PARAMS, params)
+        with open(PATH_BEST_PARAMS, 'a') as f:
+            out = csv.writer(f)
+            #out.writeheader()
+            out.writerow(best_params)
+            out.writerow(best_precision)
+            out.writerow(best_recall)
+        with open(PATH_PARAM_SPACE, 'w') as f:
+            out = csv.DictWriter(f, fieldnames=header)
+            out.writerow(params)
+            
+        """[TBR] No more dict pickling, use DictWriter instead so they are human readable
         with open(PATH_BEST_PARAMS, 'wb') as f:
             best_params = dict(zip(header, best_params))
             best_precision = dict(zip(header, best_precision))
             best_recall = dict(zip(header, best_recall))
             pickle.dump([best_params, best_recall, best_precision], f, protocol=pickle.HIGHEST_PROTOCOL)
-
+        
         # XII.2. Pickle the params dict
         with open(PATH_PARAM_SPACE, 'wb') as f:
             pickle.dump(params, f, protocol=pickle.HIGHEST_PROTOCOL)
-
+        """
         # XII.3. Final message!!
         print("Done. Highest f1_score: ", highest_f1_score)
 
@@ -494,14 +505,14 @@ if __name__ == '__main__':
     #PATH_BBOX = '/home/alex/Desktop/Helico/0_Database/RPi_import/' \
     #            '190622_201853/190622_201853_extrapolatedBB.pickle'
 
-    DISPLAY_BEST_PARAMS = True
+    DISPLAY_BEST_PARAMS = False
 
     # Need to change the PATH_ALL_RESULTS name
     FOLDER_PATH = os.path.split(VIDEO_STREAM_PATH)[0]
     TIMESTAMP = os.path.split(VIDEO_STREAM_PATH)[1][:14]
     PATH_ALL_RESULTS = os.path.join(FOLDER_PATH, TIMESTAMP + "MD_ParamSearch_All.csv")
-    PATH_BEST_PARAMS = os.path.join(FOLDER_PATH, TIMESTAMP + "MD_ParamSearch_Best.pickle")
-    PATH_PARAM_SPACE = os.path.join(FOLDER_PATH, TIMESTAMP + "MD_ParamSearch_Space.pickle")
+    PATH_BEST_PARAMS = os.path.join(FOLDER_PATH, TIMESTAMP + "MD_ParamSearch_Best.csv")
+    PATH_PARAM_SPACE = os.path.join(FOLDER_PATH, TIMESTAMP + "MD_ParamSearch_Space.csv")
 
     # --------------
     # CONSTANTS
@@ -517,5 +528,9 @@ if __name__ == '__main__':
     FLAG_OPTICAL_FLOW = False  # A bit better, but still way too slow
     FLAG_DISPLAY_TIMING = False
     FLAG_GRAY_SCALE = True
+    
+    FLAG_MULTIPROCESSING = True
+    
+        
 
     main()

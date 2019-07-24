@@ -147,13 +147,23 @@ def main():
         bbox_heli_ground_truth = pickle.load(f)
 
     # Rebuild the crop directory
-    vt.crop.clean_crop_directory(PATH_FOLDER)
+    vt.bbox.clean_crop_directory(PATH_FOLDER)
 
     # IV.2.2 Replay the video and save the crops to file
     counter_crop = 0  # Used to increment picture name
     counter_bbox = 0  # Used for the skip function
-
+    print("[INFO] Number of bbox on record:", len(bbox_heli_ground_truth))
+    try:
+        first_bbox = min(bbox_heli_ground_truth.keys())
+        last_bbox = max(bbox_heli_ground_truth.keys())
+    except ValueError:
+        print("[ERROR] No bbox found. Aborting")
+        raise
+        
     for index, frame in enumerate(vs_cache):
+        if not first_bbox < index < last_bbox:
+            continue
+        
         frame = frame.copy()
         try:
             (x, y, w, h) = bbox_heli_ground_truth[index]
@@ -161,37 +171,35 @@ def main():
 
             if counter_bbox % (SKIP+1) == 0:
                 # IV.2.2.1 First option: NN_SIZE crop
-                # Limit the size of the crop
-                x_start = max(0, xc - NN_SIZE[0]//2)
-                x_end = min(frame_width, xc + NN_SIZE[0]//2)
-                y_start = max(0, yc - NN_SIZE[1]//2)
-                y_end = min(frame_height, yc + NN_SIZE[1]//2)
-                crop = frame[y_start:y_end, x_start:x_end]
-                crop = vt.crop.nn_size_crop(crop, NN_SIZE, (xc, yc), frame.shape)
-                out_path = os.path.join(PATH_CROPS_NN_SIZE, TIMESTAMP+str(counter_crop)+'.jpg')
+                crop = vt.bbox.nn_size_crop(frame, (x, y, w, h), NN_SIZE)
+                out_path = os.path.join(PATH_CROPS_NN_SIZE, TIMESTAMP+str(counter_crop)+EXT)
                 cv2.imwrite(out_path, crop)
+                
                 # IV.2.2.2 Second option: (square) bbox crop resized to NN_SIZE
-                s = max(w, h) if max(w, h) % 2 == 0 else max(w, h) + 1  # even only
-                x_start = max(0, xc - s//2)
-                x_end = min(frame_width, xc + s//2)
-                y_start = max(0, yc - s//2)
-                y_end = min(frame_height, yc + s//2)
-                crop = frame[y_start:y_end, x_start:x_end]
-                crop = vt.crop.nn_size_crop(crop, (s, s), (xc, yc), frame.shape)  # pad to (s, s)
-                # Then only we resize to NN_SIZE
-                crop = cv2.resize(crop, NN_SIZE)  # Resize to NN input size
-                out_path = os.path.join(PATH_CROP_RESIZED_TO_NN, TIMESTAMP+str(counter_crop)+'.jpg')
+                crop = vt.bbox.crop_resized_to_nn(frame, (x, y, w, h), NN_SIZE)
+                out_path = os.path.join(PATH_CROP_RESIZED_TO_NN, TIMESTAMP+str(counter_crop)+EXT)
                 cv2.imwrite(out_path, crop)
+                
                 # IV.2.2.3 Create a negative image - no helico
-                crop = vt.crop.crop_negative(frame, NN_SIZE, (xc, yc))
-                out_path = os.path.join(PATH_NEGATIVES, TIMESTAMP+str(counter_crop)+'.jpg')
+                # Take the crops from locations on the trajectory where the helicopter is not
+                type_negative_crop = np.random.random()
+                if type_negative_crop <= RATIO_NEGATIVE_ON_PATH:  # On trajectory crop
+                    flag_success, crop = vt.bbox.on_trajectory_negative_crop(frame, (x, y, w, h), bbox_heli_ground_truth, NN_SIZE)
+                    if not flag_success:
+                        print("[WARNING] In {} (frame: {}): failed taking negative on trajectory.".format(os.path.split(PATH_VIDEO)[1][:13], index))
+                        crop = vt.bbox.random_negative_crop(frame, (x, y, w, h), NN_SIZE)
+                else:
+                    crop = vt.bbox.random_negative_crop(frame, (x, y, w, h), NN_SIZE)
+                out_path = os.path.join(PATH_NEGATIVES, TIMESTAMP+str(counter_crop)+EXT)
                 cv2.imwrite(out_path, crop)
+                
                 # Increment crop counter
                 counter_crop += 1
             cv2.rectangle(frame, (x, y), (x+w, y+h), COLOR['WHITE'], 2)
             counter_bbox += 1
         except KeyError:
-            pass
+            print("[ERROR] An incorrect dictionnary key was requested")
+            raise
         cv2.imshow(window_name, frame)
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q'):
@@ -236,6 +244,9 @@ if __name__ == '__main__':
     COLOR = {'WHITE': (255, 255, 255), 'BLUE': (255, 0, 0), 'GREEN': (0, 255, 0), 'RED': (0, 0, 255), 'BLACK': (0, 0, 0)}
     
     SKIP = args["skip"]
+    EXT = '.png'
+    RATIO_NEGATIVE_ON_PATH = 0.5
+    MAX_NEGATIVE_ATTEMPT = 50
     # NN_SIZE is a pair of even number otherwise next larger even number is used.
     NN_SIZE = tuple(int(s) for s in args["neural_network_size"].split('x'))
     try:
