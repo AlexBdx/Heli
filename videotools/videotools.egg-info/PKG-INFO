@@ -1,0 +1,16 @@
+Metadata-Version: 2.1
+Name: videotools
+Version: 0.0.2
+Summary: A collection of helper functions to process videos.
+Home-page: https://github.com/AlexBdx/Heli/tree/master/videotools
+Author: Alex Bondoux
+Author-email: alexandre.bdx@gmail.com
+License: UNKNOWN
+Description: # Package description
+        # Welcome to videotools!
+        
+Platform: UNKNOWN
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: GNU General Public License v3 (GPLv3)
+Classifier: Operating System :: POSIX :: Linux
+Description-Content-Type: text/markdown

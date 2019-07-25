@@ -1,0 +1,6 @@
+README.md
+setup.py
+videotools.egg-info/PKG-INFO
+videotools.egg-info/SOURCES.txt
+videotools.egg-info/dependency_links.txt
+videotools.egg-info/top_level.txt
