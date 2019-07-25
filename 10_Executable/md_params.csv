@@ -1,0 +1,2 @@
+iou,gaussWindow,residualConnections,dilationIterations,sigma
+0.5,1,2,7,0.7
