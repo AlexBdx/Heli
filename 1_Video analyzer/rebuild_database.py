@@ -17,13 +17,14 @@ import os
 import pickle
 import glob
 import numpy as np
-import video_tools as vt
+from videotools_dev import *
+#import videotools_dev as vt
 import tqdm
 import multiprocessing as mp
 import sys
 
 def main(folder):
-    #while 16000-vt.init.check_ram_use() < 2000:  # Less than a Gb left
+    #while 16000-init.check_ram_use() < 2000:  # Less than a Gb left
         #time.sleep(1)
         #print("[INFO] Process waiting for more RAM")
     #----------------------------------------------------------
@@ -130,11 +131,11 @@ def main(folder):
     #----------------------------------------------------
             
     # Rebuild the crop folders
-    vt.bbox.clean_crop_directory(PATH_FOLDER)
+    bbox.clean_crop_directory(PATH_FOLDER)
     
     
-    video_stream, nb_frames, frame_width, frame_height = vt.init.import_stream(PATH_VIDEO)
-    #vs2 = vt.init.cache_video(video_stream, 'list')
+    video_stream, nb_frames, frame_width, frame_height = init.import_stream(PATH_VIDEO)
+    #vs2 = init.cache_video(video_stream, 'list')
 
     
     # Rebuild the crops
@@ -184,28 +185,29 @@ def main(folder):
         # Rebuild the different folders
         crop_name = TIMESTAMP+'_'+str(frame_number)
         if REBUILD_NN_SIZE_CROPS:
-            crop = vt.bbox.nn_size_crop(frame, (x, y, w, h), NN_SIZE)
+            crop = bbox.nn_size_crop(frame, (x, y, w, h), NN_SIZE)
             out_path = os.path.join(PATH_CROPS_NN_SIZE, crop_name+EXT)
-            cv2.imwrite(out_path, crop, params=(cv2.IMWRITE_PNG_COMPRESSION, PNG_COMPRESSION))
+            cv2.imwrite(out_path, crop)
         if REBUILD_CROPS_RESIZE_TO_NN:
-            crop = vt.bbox.crop_resized_to_nn(frame, (x, y, w, h), NN_SIZE)
+            crop = bbox.crop_resized_to_nn(frame, (x, y, w, h), NN_SIZE)
             out_path = os.path.join(PATH_CROP_RESIZED_TO_NN, crop_name+EXT)
-            cv2.imwrite(out_path, crop, params=(cv2.IMWRITE_PNG_COMPRESSION, PNG_COMPRESSION))
+            cv2.imwrite(out_path, crop)
         if REBUILD_NEGATIVE:
-            type_negative_crop = np.random.random()
-            if type_negative_crop <= RATIO_NEGATIVE_ON_PATH:  # On trajectory crop
-                flag_success, crop = vt.bbox.on_trajectory_negative_crop(frame, (x, y, w, h), bbox_heli_ground_truth, NN_SIZE)
-                if not flag_success:
-                    print("[WARNING] In {} (frame: {}): failed taking negative on trajectory.".format(os.path.split(PATH_VIDEO)[1][:13], frame_number))
-                    crop = vt.bbox.random_negative_crop(frame, (x, y, w, h), NN_SIZE)
-                    on_path = 0
+            for _ in range(NEGATIVE_PER_PROCESSED_FRAME):
+                type_negative_crop = np.random.random()
+                if type_negative_crop <= RATIO_NEGATIVE_ON_PATH:  # On trajectory crop
+                    flag_success, crop = bbox.on_trajectory_negative_crop(frame, (x, y, w, h), bbox_heli_ground_truth, NN_SIZE)
+                    if not flag_success:
+                        print("[WARNING] In {} (frame: {}): failed taking negative on trajectory.".format(os.path.split(PATH_VIDEO)[1][:13], frame_number))
+                        crop = bbox.random_negative_crop(frame, (x, y, w, h), NN_SIZE)
+                        on_path = 0
+                    else:
+                        on_path = 1
                 else:
-                    on_path = 1
-            else:
-                crop = vt.bbox.random_negative_crop(frame, (x, y, w, h), NN_SIZE)
-                on_path = 0
-            out_path = os.path.join(PATH_NEGATIVES, crop_name+'_'+str(on_path)+EXT)
-            cv2.imwrite(out_path, crop, params=(cv2.IMWRITE_PNG_COMPRESSION, PNG_COMPRESSION))
+                    crop = bbox.random_negative_crop(frame, (x, y, w, h), NN_SIZE)
+                    on_path = 0
+                out_path = os.path.join(PATH_NEGATIVES, crop_name+'_'+str(on_path)+EXT)
+                cv2.imwrite(out_path, crop)
                 
         t5 = time.perf_counter()
 
@@ -218,7 +220,7 @@ def main(folder):
         negative_images = sorted([img for img in glob.glob(PATH_NEGATIVES+'/*')])
 
         # Create the extractor object
-        extractor = vt.extract.extractor(BLUR, CANNY_THRESH_1, CANNY_THRESH_2, MASK_DILATE_ITER, MASK_ERODE_ITER)
+        extractor = extract.extractor(BLUR, CANNY_THRESH_1, CANNY_THRESH_2, MASK_DILATE_ITER, MASK_ERODE_ITER)
         
         # Generate the extracted helicopter pictures
         timing = []
@@ -230,8 +232,9 @@ def main(folder):
             extracted_area, extracted_image = extractor.extract_positive(img_array)  # Variable size
             if extracted_area:
                 list_max_area.append(extracted_area)
-                path_output = os.path.join(PATH_EXTRACTED, str(index)+EXT)
+                path_output = os.path.join(PATH_EXTRACTED, str(index)+'.png')  # 4 channles RGB only available with png
                 assert extracted_image.dtype==np.uint8
+                # Save the 4 channel helico image
                 cv2.imwrite(path_output, extracted_image, params=(cv2.IMWRITE_PNG_COMPRESSION, PNG_COMPRESSION))
             #else:
                 #print("[WARNING] extracted_area = 0, skipping this extraction ({}.png)".format(index))
@@ -258,7 +261,7 @@ def main(folder):
             #blended_image = cv2.cvtColor(blended_image, cv2.COLOR_RGB2BGR)
             path_output = os.path.join(PATH_AUGMENTED, str(count)+EXT)
             assert blended_image.dtype==np.uint8
-            cv2.imwrite(path_output, blended_image, params=(cv2.IMWRITE_PNG_COMPRESSION, PNG_COMPRESSION))
+            cv2.imwrite(path_output, blended_image)
     
         # Output labels to a file
         path_output = os.path.join(PATH_AUGMENTED, TIMESTAMP+'_labels_aug.txt')
@@ -284,21 +287,31 @@ if __name__ == '__main__':
     FOLDERS = sorted(FOLDERS)
     print("[INFO] Folders to rebuild:")
     print(FOLDERS)
-    #FOLDERS = [FOLDERS[1]]
+    
+    # Folders override
+    FOLDERS = [FOLDERS[0]]
     #FOLDERS = [FOLDERS[0], FOLDERS[1]]  # Override
-    #print(FOLDERS)
-    RATIO_NEGATIVE_ON_PATH = 0.5  # (Nb of crops taken on trajectory)/(Nb random crops on the frame)
-    REBUILD_NN_SIZE_CROPS = True
+    
+    # What do you want to rebuild?
+    REBUILD_NN_SIZE_CROPS = False
     REBUILD_CROPS_RESIZE_TO_NN = False
-    REBUILD_NEGATIVE = True
+    REBUILD_NEGATIVE = False
     REBUILD_AUGMENTED = False
-    PNG_COMPRESSION = 1  # 0 to 9
-    EXT = '.png'
+    
+    # Rebuilding proportions
+    RATIO_NEGATIVE_ON_PATH = 0.5  # (Nb of crops taken on trajectory)/(Nb random crops on the frame)
+    NEGATIVE_PER_PROCESSED_FRAME = 1  # Number of negatives issued per *processed* frame
+    
+    # Image format
+    PNG_COMPRESSION = 9  # 0 to 9, ncessary for augmented images due to the alpha channel
+    EXT = '.jpg'  # All others
+    
+    # How fast do you want to go?
     FLAG_MULTIPROCESSING = True
     if FLAG_MULTIPROCESSING:
         """[Activate multiprocessing]"""
         #processes = os.cpu_count()
-        processes = 2
+        processes = 2  # Pumps a lot of RAM, due to caching images to write?
         pool = mp.Pool(processes)
         print("Started a pool with {} workers".format(processes))
         print()
@@ -307,7 +320,7 @@ if __name__ == '__main__':
         r=list(tqdm.tqdm(pool.imap_unordered(main, FOLDERS), total=len(FOLDERS)))
         #r=list(tqdm.tqdm(pool.imap(main, FOLDERS), total=len(FOLDERS)))
         """"""
-    else:
+    else:  # Single core
         """[Sequential processing]"""
         for folder in tqdm.tqdm(FOLDERS):
             main(folder)
