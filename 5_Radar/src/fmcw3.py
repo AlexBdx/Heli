@@ -7,6 +7,7 @@ import datetime
 import time
 import argparse
 import os
+import tqdm
 
 # Custom packages
 from fmcw import *
@@ -31,17 +32,21 @@ fmcw3 = fmcw.FMCW3(adf4158, encoding=ENCODING)
 f0 = 5.3e9
 bw = 600e6
 tsweep = 1e-3
-tsweep = 1e-3
 tdelay = 2e-3
-#tdelay = 0
+#tdelay = tsweep
 pa_off_advance = 0.2e-3
 decimate = 3
 #decimate = 1
 ch_a = True
 ch_b = True
-downsampler = True
-#downsampler = False
-quarter = False
+channels = int(ch_a) + int(ch_b)
+adc_bits = 12
+res = adc_bits//8 + 1
+
+downsampler = False  # Divides the ADC clock by 2
+quarter = False  # By 4
+adc_sampling_period = 10**-6
+N_points_per_sweep = tsweep/adc_sampling_period
 
 fmcw3.set_gpio(led=True, adf_ce=True)
 fmcw3.set_adc(oe2=True)
@@ -75,7 +80,8 @@ if os.path.isdir(folderName):
 sp.run(['mkdir', folderName])
 writer = Writer(ts+'_fmcw3.log', q)
 """
-writer = fmcw.Writer('fmcw3.log', q, ENCODING)  # Automatically overwritten
+timeout = 1  # s
+writer = fmcw.Writer('fmcw3.log', q, ENCODING, timeout)  # Automatically overwritten
 writer.start()
 
 fmcw3.set_channels(a=ch_a, b=ch_b)
@@ -83,15 +89,18 @@ fmcw3.set_channels(a=ch_a, b=ch_b)
 # t0 = time.perf_counter()  # Python3
 t0 = time.perf_counter()
 #print("[INFO] Started at {} s".format(t0))
+data_per_frame = N_points_per_sweep*channels*res
+expected_data = round(data_per_frame*DURATION/(decimate*(tsweep+tdelay)))
+pbar = tqdm.tqdm(total = expected_data)
 try:
     while time.perf_counter() - t0 < DURATION:
         #print("[INFO] Elasped time: {:.3f} s".format(time.perf_counter() - t0))
         r = fmcw3.device.read(0x10000)
-        print(type(r))
         #print("[INFO] Read {:,} bytes from device".format(len(r)))
         #r = fmcw3.device.readline(5000)
         if len(r) != 0:
             q.put(r)
+            pbar.update(len(r))
 finally:
     fmcw3.set_adc(oe1=True, shdn1=True, shdn2= True)
     fmcw3.set_channels(a=False, b=False)
@@ -99,6 +108,8 @@ finally:
     fmcw3.set_gpio(pa_off=True)
     fmcw3.clear_buffer()
     fmcw3.close()
+    pbar.close()
     #print('Done')
     q.put('')
+    print("[INFO] Expected {:,} byte".format(expected_data))
     writer.join()

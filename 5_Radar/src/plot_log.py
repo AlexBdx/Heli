@@ -14,13 +14,13 @@ import copy
 # Custom packages
 from fmcw import *
 
-fs = 2e6
+fs = 2e6  # IF amplifier bandwidth
 fir_gain = 9.0
 c = 299792458.0
 adc_ref = 1
 adc_bits = 12
 
-max_range = 50
+max_range = 250
 d_antenna = 28e-3 #Antenna distance
 #channel_dl = 0e-3 #Channel length difference
 angle_limit = 55
@@ -81,15 +81,18 @@ with open(PATH_LOG, read_mode) as f:
     channels = int(settings['a']) + int(settings['b'])
     print("[INFO] {} byte of setting data found: \n{}".format(f.tell(), settings))
 
+    multiplier = 1
     if half:
         fs /= 2
+        multiplier = 2
         if quarter:
             fs /= 2
+            multiplier = 4
 
     fc = f0+bw/2
     wl = c/(f0+bw/2)
     samples_in_sweep = int(tsweep*fs)
-    NBYTES_SWEEP = channels*samples_in_sweep*2
+    NBYTES_SWEEP = channels*samples_in_sweep*multiplier
     print("[INFO] Samples in sweep: {} | Sweep length: {} byte".format(samples_in_sweep, NBYTES_SWEEP))
 
     if sweeps_to_read != None:
@@ -111,6 +114,7 @@ ch1 = np.array(data[1], dtype=np.int16)
 ch2 = np.array(data[2], dtype=np.int16)
 # CRITICAL, DO NOT REMOVE THIS ASSERTION
 assert ch1.shape == ch2.shape
+print("[INFO] Found arrays of shape", ch1.shape)
 """
 index = np.random.randint(len(ch1))
 plt.figure()
@@ -141,6 +145,9 @@ print("[INFO] Data period: {:.3f} s".format(T))
 t = np.linspace(0, tsweep, len(ch1[0]))
 f = np.linspace(0, fs/2, len(ch1[0])//2+1)
 d = postprocessing.f_to_d(f, bw, tsweep)
+print("Max freq: {} | B: {} | Tc: {}".format(f[-1], bw, tsweep))
+print("Max ADC range: {:.1f} m".format(d[-1]))
+#assert 1==0
 angles = 180/np.pi*np.arcsin(np.linspace(1, -1, angle_pad)*wl/(2*d_antenna))
 angle_mask = ~(np.isnan(angles) + (np.abs(angles) > angle_limit))
 angles_masked = angles[angle_mask]
@@ -158,7 +165,7 @@ w = np.kaiser(len(ch1[0]), kaiser_beta)
 w *= len(w)/np.sum(w)
 timing = dict()
 if 1:
-    subtract_background = True
+    subtract_background = False
     subtract_clutter = False  # Subtract the previous plot only
 
     """[TBR] Old method from Henrik
@@ -174,79 +181,21 @@ if 1:
             background1[i] = (x1/len(ch1))
             background2[i] = (x2/len(ch1))
     """
-    zero_sweep = np.zeros((NBYTES_SWEEP // 4,), dtype=np.int16)
+    
     if subtract_background:
         # Construct the background image of the non-skipped sweeps, and subtract it from the channels
-        background_ch1 = np.sum(ch1, axis=0)/(ch1.shape[0]-len(data['skipped_frames']))
-        background_ch2 = np.sum(ch2, axis=0)/(ch1.shape[0]-len(data['skipped_frames']))
-        ch1 = w*(ch1 - background_ch1)
-        ch2 = w*(ch2 - background_ch2)
-        # Undo processing for the frames that were actually skipped (otherwise you get the opposite of the background)
-        for skipped_frame in data['skipped_frames']:
-            ch1[skipped_frame] = zero_sweep
-            ch2[skipped_frame] = zero_sweep
+        ch1 = postprocessing.subtract_background(ch1, w, data)
+        ch2 = postprocessing.subtract_background(ch2, w, data)
     elif subtract_clutter:
         clutter_averaging = 10  # Number of previous sweeps to use for subtraction
-        a = np.zeros((clutter_averaging, ch1.shape[1]))  # Padding for the first clutter_averaging sweeps
-        print(a.shape, ch1.shape)
-
-        print(sorted(data['skipped_frames']))
-
-        # Build the indexes to use for the clutter subtraction
-        last_good_indexes = collections.deque(maxlen=clutter_averaging)  # Deque stored the last meaningful sweeps
-        last_good_indexes.append(0)  # Assume the first sweep is okay
-        subtract_ch1 = []
-        subtract_ch2 = []
-        for sweep_number in range(len(ch1)):
-            if sweep_number in sorted(data['skipped_frames']):
-                subtract_ch1.append(zero_sweep)
-                subtract_ch2.append(zero_sweep)
-            else:
-                accumulator_ch1 = zero_sweep.astype(np.float64)  # Temporarily switching to the float space
-                accumulator_ch2 = zero_sweep.astype(np.float64)
-
-                # CUSTOM WEIGHTS FOR MOVING AVERAGE
-                # WARNING: index 0 carries the oldest element in the deque, you probably want a lower weight on it.
-                weights = [1 for index in range(len(last_good_indexes))]
-                # weights = [1/(len(last_good_indexes)-index) for index in range(len(last_good_indexes))]
-                if weights[0] > weights[-1]:
-                    print("[WARNING] Currently weighting the oldest sweeps more than the youngest. Are you sure?")
-                # print(weights)
-                assert len(weights) == len(last_good_indexes)
-                for index, ii in enumerate(last_good_indexes):
-                    accumulator_ch1 += weights[index]*ch1[ii]
-                    accumulator_ch2 += weights[index]*ch2[ii]
-                # if len(last_good_indexes):
-                    # print("[WARNING] Divide by zero at ", ii)
-                accumulator_ch1 /= np.sum(weights)  # Divide by the sum of the weights used
-                accumulator_ch2 /= np.sum(weights)
-                # Sanity check, verify that casting back to np.int16 is seamless
-                assert np.max(accumulator_ch1) < 2 ** 16
-                assert np.max(accumulator_ch2) < 2 ** 16
-                assert np.min(accumulator_ch1) > -2 ** 16
-                assert np.min(accumulator_ch2) > -2 ** 16
-                subtract_ch1.append(accumulator_ch1)
-                subtract_ch2.append(accumulator_ch2)
-                last_good_indexes.append(sweep_number)
-        # Cast back to np.int16
-        subtract_ch1 = np.array(subtract_ch1, dtype=np.int16)
-        print(subtract_ch1.shape)
-        subtract_ch2 = np.array(subtract_ch2, dtype=np.int16)
-        print(subtract_ch2.shape)
-        ch1 = w*(ch1 - subtract_ch1)
-        ch2 = w*(ch2 - subtract_ch2)
-        #assert np.array_equal(ch1_2[0], w*ch1[0])  # Verify that the first item did not get subtracted anything
+        ch1 = postprocessing.subtract_clutter(ch1, w, data, clutter_averaging)
+        ch2 = postprocessing.subtract_clutter(ch2, w, data, clutter_averaging)
     else:
         ch1 = w*ch1
         ch2 = w*ch2
 
 
     angle_window = np.kaiser(len(angles), 150)
-    #plt.figure()
-    #plt.plot(angle_window)
-    #plt.show()
-    #print(angle_window.shape)
-    #assert 1==0
     clim = None
 
     if 0:
@@ -497,8 +446,9 @@ if 1:
     sweeps = ch2  # Using only ch2 for that ?
     print(sweeps.shape)
 
+    subtract_background = False
     subtract_clutter = False
-    subtract_background = True
+    
 
     #sweep_length = len(ch1[0])
     sweep_length = ch1.shape[1] # Length of the sweeps
@@ -512,7 +462,7 @@ if 1:
                 x += sweeps[j][i]
             background.append(x/len(sweeps))
 
-
+        
     nb_sweeps = len(sweeps)  # Number of sweeps 
 
     #print nb_sweeps, "nb_sweeps"
