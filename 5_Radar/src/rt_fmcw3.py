@@ -15,7 +15,7 @@ from fmcw import *
 
 
 def main():
-    if 0:
+    if 1:
         # I.3. [AUTO] Hardware and physical constants
 
         """[TBM]
@@ -33,7 +33,7 @@ def main():
 
         # Create ADC and FPGA objects
         adf4158 = adc.ADF4158()
-        fmcw3 = fmcw.FMCW3(adf4158, encoding=ENCODING)
+        fmcw3 = fmcw.FMCW3(adf4158, encoding=s['ENCODING'])
 
         # Set up objects
         fmcw3.set_gpio(led=True, adf_ce=True)
@@ -47,7 +47,7 @@ def main():
         fmcw3.write_pa_off_timer(s['t_delay'] - s['pa_off_advance'])
         fmcw3.clear_gpio(pa_off=True)
         fmcw3.clear_buffer()
-        fmcw3.set_channels(a=s['channel_1_active'], b=s['channel_2_active'])  # Would not scale up
+        fmcw3.set_channels(a=s[1], b=s[2])  # Would not scale up
 
         # Create all the bases needed
 
@@ -55,45 +55,43 @@ def main():
         # Now it is time to plot that crap!
         t, f, d, angles = postprocessing.create_bases(s)
         angle_mask = ~(np.isnan(angles) + (np.abs(angles) > s['angle_limit']))
-        angles_masked = angles[angle_mask]
+        #angles_masked = angles[angle_mask]
         print("Max ADC range: {:.1f} m".format(d[-1]))
-        tfd_angles = (t, f, d, angles, angles_masked)
+        tfd_angles = (t, f, d, angles, angle_mask)
         """========================================================================================================"""
 
         # Create the log and get ready to write
         raw_usb_data_to_file = Queue()
-        raw_usb_data_to_file.put(str(s)+'\n')
+        #raw_usb_data_to_file.put(str(s)+'\n')
 
         raw_usb_to_decode = Queue()
-        raw_usb_to_decode.put(str(s) + '\n')
+        #raw_usb_to_decode.put(str(s) + '\n')
 
-        timeout = DURATION  # [s] Timeout for reading the queue
-        #write_raw_to_file = fmcw.Writer(PATH_LOG, raw_usb_data_to_file, ENCODING, timeout)  # Log is automatically overwritten
-        write_raw_to_file = postprocessing.Writer(PATH_LOG_FOLDER, raw_usb_data_to_file, ENCODING, timeout)  # Log is automatically overwritten
+        #write_raw_to_file = fmcw.Writer(PATH_LOG, raw_usb_data_to_file, s['ENCODING'], s['timeout'])  # Log is automatically overwritten
+        write_raw_to_file = postprocessing.Writer(raw_usb_data_to_file, s, encoding='latin1')  # Log is automatically overwritten
         write_raw_to_file.start()  # Starts it on a separate thread
 
-        #decode_raw = postprocessing.Decode(PATH_LOG_FOLDER, raw_usb_to_decode, s, tfd_angles, timeout)
-        #decode_raw.start()  # Starts it on a separate thread
+        decode_raw = postprocessing.Decode(raw_usb_to_decode, s, tfd_angles)
+        decode_raw.start()  # Starts it on a separate thread
 
         # Calculate how much data is supposed to be written to file
         # data_per_frame = s['t_sweep'] * adc_sampling_frequency * ADC_BYTES * s['channel_count']
-        frame_period = (s['acquisition_decimate']+1)*(s['t_sweep']+s['t_delay'])
-        expected_data = s['BYTE_USB_READ']*ceil(floor(s['NBYTES_SWEEP']*s['duration']/frame_period)/s['BYTE_USB_READ']) + len(str(s)) + 1
-        progress_bar = tqdm.tqdm(total=expected_data)
-        progress_bar.update(len(str(s)))  # Add the initial settings
+        # frame_period = (s['acquisition_decimate']+1)*(s['t_sweep']+s['t_delay'])
+
 
         """[Data Acquisition]"""
         try:
             t0 = time.perf_counter()  # Keep track of starting time
-            while time.perf_counter() - t0 < s['duration']:
+            while time.perf_counter() - t0 < s['duration']:  # Endless if np.inf
+                t1 = time.perf_counter()
                 r = fmcw3.device.read(s['BYTE_USB_READ'])
+                t2 = time.perf_counter()
+                print("Read {} byte in {:.3f} s ({:,} byte/s)".format(len(r), t2-t1, round(len(r)/(t2-t1))))
 
                 if len(r) != 0:
                     raw_usb_data_to_file.put(r)
-                    #raw_usb_to_decode.put(r)
-                    # Process a batch
-                    #process_batch(r)
-                    # progress_bar.update(len(r))
+                    raw_usb_to_decode.put(r)
+
         finally:
             fmcw3.set_adc(oe1=True, shdn1=True, shdn2=True)
             fmcw3.set_channels(a=False, b=False)
@@ -101,54 +99,48 @@ def main():
             fmcw3.set_gpio(pa_off=True)
             fmcw3.clear_buffer()
             fmcw3.close()
-            progress_bar.close()
             raw_usb_data_to_file.put('')
             raw_usb_to_decode.put('')
             write_raw_to_file.join()
-            #decode_raw.join()
-        print("[INFO] Expected {:,} byte".format(expected_data))
+            decode_raw.join()
 
-    if 1:
+    if 0:
 
         """CAN BE REMOVED IF THERE IS AN ACQUISITION (REDUNDANT)"""
         # Now it is time to plot that crap!
         t, f, d, angles = postprocessing.create_bases(s)
         angle_mask = ~(np.isnan(angles) + (np.abs(angles) > s['angle_limit']))
-        angles_masked = angles[angle_mask]
+        #angles_masked = angles[angle_mask]
         print("Max ADC range: {:.1f} m".format(d[-1]))
-        tfd_angles = (t, f, d, angles, angles_masked)
+        tfd_angles = (t, f, d, angles, angle_mask)
         """========================================================================================================"""
 
 
         """[def decode_batch] ======================================================================================"""
         #def process_batch(s):
         # Now we process the file
-        read_mode = 'rb' if BINARY else 'r'
-        rest = bytes("", encoding=ENCODING)  # Start without a rest
-        counter_sweeps = 0
-        nb_channels = s['channel_count']
+        read_mode = 'rb' if BINARY else 'r'  # Written as str but read as byte
+        
         """
         ch = dict()
         for k in range(nb_channels):
             ch[k + 1] = []
         ch['skipped_sweeps'] = []  # Stores the skipped frames for both channels
         """
+        counter_sweeps = 0
         next_header = None
+        rest = bytes("", encoding=s['ENCODING'])  # Start without a rest
         with open(os.path.join(PATH_LOG_FOLDER, 'fmcw3.log'), read_mode) as f:
             _ = f.readline()  # Ignore the settings
             print("[INFO] Settings end at", f.tell())
-            #f.seek(f.tell()+50)  # Start in the middle of a sweep
             f.seek(f.tell()+np.random.randint(100))  # Start randomly in a sweep
             print("[INFO] Randomly moved the start of the batch to", f.tell())
             batch = f.read(s['BYTE_USB_READ'])  # Read a batch
-        t0 = time.perf_counter()
-        ch, next_header, rest, new_counter_sweeps = postprocessing.process_batch(rest, batch, start, s['NBYTES_SWEEP'], s['channel_count'], next_header, counter_sweeps, s['sweeps_to_drop'], verbose=False)
-        t1 = time.perf_counter()
+        ch, next_header, rest, new_counter_sweeps = postprocessing.process_batch(rest, batch, s, next_header, counter_sweeps, verbose=False)
 
         # Process the batches we have received
-        # II.3. Sanity check
-        # CRITICAL, DO NOT REMOVE THIS ASSERTION
-        if np.array_equal(ch[1], ch[2]):  # Test for the downsampler bug
+        # II.3. Sanity checks - DO NOT REMOVE
+        if np.array_equal(ch[1], ch[2]):  # Test for the down_sampler bug
             raise ValueError('[ERROR] Channel data is identical. Have you checked the downsampler?')
         for channel in ch:  # Test channel shapes
             if type(channel) == int:
@@ -157,14 +149,13 @@ def main():
         print("[INFO] Found {} channels of shape {}".format(len(ch) - 1, ch[1].shape))
 
         # Display results
-
         expected_lines = ch[1].shape[0]
         skipped_sweeps = len(ch['skipped_sweeps'])
         ratio = 100 * (1 - skipped_sweeps / expected_lines)
         total_duration = s['T'] * ch[1].shape[0]  # Total recording time
         print("[INFO] Found {} frames | Skipped : {} | Success rate: {:.1f} %".format(ch[1].shape[0], skipped_sweeps, ratio))
         print('[INFO] Imported {:.3f} s of data as {} frames of {:.3f} s'.format(total_duration, ch[1].shape[0], s['T']))
-        print('[INFO] Import done in {:.3f} s ({:.1f} s/s)'.format(t1 - t0, total_duration / (t1 - t0)))
+        #print('[INFO] Import done in {:.3f} s ({:.1f} s/s)'.format(t1 - t0, total_duration / (t1 - t0)))
         """END OF DECODE BATCH===================================================="""
 
 
@@ -179,11 +170,11 @@ def main():
         timing = dict()  # [DEBUG]
         if 1:
             if s['subtract_background']:  # [bool]
-                ch[1] = postprocessing.s['subtract_background'](ch[1], w, ch)
-                ch[2] = postprocessing.s['subtract_background'](ch[2], w, ch)
+                ch[1] = postprocessing.subtract_background(ch[1], w, ch)
+                ch[2] = postprocessing.subtract_background(ch[2], w, ch)
             elif s['subtract_clutter']:  # [int]
-                ch[1] = postprocessing.s['subtract_clutter'](ch[1], w, ch, s['subtract_clutter'])
-                ch[2] = postprocessing.s['subtract_clutter'](ch[2], w, ch, s['subtract_clutter'])
+                ch[1] = postprocessing.ssubtract_clutter(ch[1], w, ch, s['subtract_clutter'])
+                ch[2] = postprocessing.ssubtract_clutter(ch[2], w, ch, s['subtract_clutter'])
             else:
                 ch[1] = w * ch[1]
                 ch[2] = w * ch[2]
@@ -208,8 +199,8 @@ def main():
                 #if_window.update_plot(if_data, time_stamp[1], clim)
 
                 # ANGLE OPTIONS
-                fxdb, clim = postprocessing.calculate_angle_plot([ch[1][plot_i], ch[2][plot_i]], s, d, clim, angle_mask)
-                #display.plot_angle(t, d, fxdb, angles_masked, clim, s['max_range'], time_stamp, method='', show_plot=True)
+                fxdb, clim = postprocessing.calculate_angle_plot({ch[1][plot_i], ch[2][plot_i]}, s, d, clim, angle_mask)
+                #display.plot_angle(t, d, fxdb, angles[angle_mask], clim, s['max_range'], time_stamp, method='', show_plot=True)
                 angle_window.update_plot(fxdb, time_stamp[1], clim)
 
                 # RANGE TIME OPTIONS
@@ -253,13 +244,14 @@ def main():
 # I. Parameters setup
 # I.1. Command line arguments
 ap = argparse.ArgumentParser()
-ap.add_argument("-d", "--duration", type=int, default=2, help="duration of the recording [s]")
+ap.add_argument("-d", "--duration", type=int, default=10, help="duration of the recording [s]")
 ap.add_argument("-l", "--log", type=str, default=os.getcwd(), help="Path to folder containing the output logs")
 args = vars(ap.parse_args())
 DURATION = args["duration"]
+if DURATION == 0:
+    DURATION = np.inf  # Will run endlessly until keyboard interrupt
 PATH_LOG_FOLDER = args["log"]
 ENCODING = 'latin1'
-start = b'\x7f'
 BINARY = True
 
 
@@ -293,21 +285,29 @@ s = {
     'subtract_background': False,
     'subtract_clutter': 0,
     'flag_Hanning': True,
-    'real_time_recall': 2
-    
+    'real_time_recall': 10,
+    'ENCODING': ENCODING,
+    'timeout': 0.5,
+    'path_raw_log': os.path.join(PATH_LOG_FOLDER, 'fmcw3.log'),
+    'path_csv_log': os.path.join(PATH_LOG_FOLDER, 'fmcw3.csv'),
+    'refresh_period': 0.5
 }
 active_channels = {
-    'channel_1_active': True,
-    'channel_2_active': True,
-    'channel_3_active': False,
-    'channel_4_active': False
+    1: True,
+    2: True,
+    3: False,
+    4: False
 }  # Add all the channels you want
 
 # I.3. [AUTO] Other parameters
 # Finalize the settings
 s['duration'] = DURATION
 s['timestamp'] = datetime.datetime.now().strftime('%y%m%d_%H%M%S')
+s['total_channels'] = len(active_channels)
 s['channel_count'] = sum(active_channels.values())  # Add the channel count
+s['active_channels'] = [key for key in active_channels if active_channels[key]]
+print(s['active_channels'])
+assert len(s['active_channels'])==2
 s = {**s, **active_channels}  # Merge both dict
 print("[INFO] Acquisition parameters:")
 for item in s.items():
@@ -335,10 +335,13 @@ NBYTES_SWEEP = s['channel_count'] * int(s['t_sweep'] * s['if_amplifier_bandwidth
 s['SWEEP_LENGTH'] = SWEEP_LENGTH
 s['NBYTES_SWEEP'] = NBYTES_SWEEP
 s['MAX_DIFFERENTIAL_VOLTAGE'] = 1
-
+s['start'] = b'\x7f'[0]
 s['overall_decimate'] = (s['sweeps_to_drop'] + 1) * (s['acquisition_decimate'] + 1)
 s['T'] = (s['t_sweep'] + s['t_delay']) * s['overall_decimate']  # Period of the meaningful data
-
+if s['refresh_period'] >= s['T']:
+    s['refresh_stride'] = round(s['refresh_period']/s['T'])
+else:
+    s['refresh_stride'] = 1  # Most likely unsustainable if T low
 # Sanity check
 print()
 print("[INFO] Batch size {} byte".format(s['BYTE_USB_READ']))
