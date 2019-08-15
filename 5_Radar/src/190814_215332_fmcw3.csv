@@ -1,4 +1,0 @@
-duration,byte_usb_read,bw,t_sweep,t_delay,down_sampler,quarter,acquisition_decimate,soft_decimate,max_range,refresh_period,range_time_to_display,real_time_recall,subtract_background,subtract_clutter,flag_Hanning,1,2,kaiser_beta,channel_offset,swap_chs,pa_off_advance,encoding,timeout,path_raw_log,path_csv_log,c,f0,if_amplifier_bandwidth,fir_gain,adc_ref,adc_bits,d_antenna,angle_limit,angle_pad,max_differential_voltage,start,channel_count,active_channels,adc_bytes,range_adc,sweep_length,overall_decimate,T,refresh_stride,nbytes_sweep,nb_values_sweep
-10,65536,600000000.0,0.001,0.002,True,False,2,0,50,0.25,1,1,False,0,False,True,True,6,21,True,0.0002,latin1,0.5,/home/alex/Desktop/Helico/5_Radar/src/190814_215332_fmcw3.log,/home/alex/Desktop/Helico/5_Radar/src/190814_215332_fmcw3.csv,299792458.0,5300000000.0,1000000.0,9.0,1,12,0.028,55,100,1,127,2,"[1, 2]",2,249.82704833333332,1000,3,0.009000000000000001,28,4000,2000
-
-Timestamp,Sweep number,Channel
