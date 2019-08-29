@@ -38,19 +38,20 @@ def main():
     # I.1. Set up ADC and FPGA objects
     adf4158 = adc.ADF4158()
 
-    fmcw3 = fmcw.FMCW3(adf4158, encoding=s['encoding'])
-    fmcw3.set_gpio(led=True, adf_ce=True)
-    fmcw3.set_adc(oe2=True)
-    fmcw3.clear_adc(oe1=True, shdn1=True, shdn2=True)
-    delay = fmcw3.set_sweep(s['f0'], s['bw'], s['t_sweep'], s['t_delay'])  # Returned value delay not used
-    fmcw3.set_downsampler(enable=s['down_sampler'], quarter=s['quarter'])
-    fmcw3.write_sweep_timer(s['t_sweep'])
-    fmcw3.write_sweep_delay(s['t_delay'])
-    fmcw3.write_decimate(s['acquisition_decimate'])
-    fmcw3.write_pa_off_timer(s['t_delay'] - s['pa_off_advance'])
-    fmcw3.clear_gpio(pa_off=True)
-    fmcw3.clear_buffer()
-    fmcw3.set_channels(a=s[1], b=s[2])  # Would not scale up
+    fpga = ftdi.FPGA(adf4158, encoding=s['encoding'])
+    fpga.set_gpio(led=True, adf_ce=True)
+    fpga.set_adc(oe2=True)
+    fpga.clear_adc(oe1=True, shdn1=True, shdn2=True)
+    real_delay = fpga.set_sweep(s['f0'], s['bw'], s['t_sweep'], s['t_delay'])  # Returned value delay not used
+    print("[INFO] Real delay between sweeps: {} s".format(real_delay))
+    fpga.set_downsampler(enable=s['down_sampler'], quarter=s['quarter'])
+    fpga.write_sweep_timer(s['t_sweep'])
+    fpga.write_sweep_delay(s['t_delay'])
+    fpga.write_decimate(s['acquisition_decimate'])
+    fpga.write_pa_off_timer(s['t_delay'] - s['pa_off_advance'])
+    fpga.clear_gpio(pa_off=True)
+    fpga.clear_buffer()
+    fpga.set_channels(a=s[1], b=s[2])  # Would not scale up
 
     # I.2. Create all the bases needed for the plots
     t, f, d, angles = postprocessing.create_bases(s)
@@ -59,6 +60,16 @@ def main():
     tfd_angles = (t, f, d, angles, angle_mask)
 
     # I.3. Multiprocessing related objects
+    """[To do]
+    # Create a subprocess that will read the FPGA
+    def read_fpga(fpga_object, queue, s):
+        while True:
+            queue.put(fpga_object.device.read(s['byte_usb_read']))
+    raw_usb = Queue()
+    fpga_reader = mp.Process(target=read_fpga, args=(raw_usb,))
+    fpga_reader.start()
+    """
+
     # Write raw data directly to file
     raw_usb_data_to_file = Queue()
     write_raw_to_file = postprocessing.Writer(raw_usb_data_to_file, s, encoding='latin1')  # Spawn a new thread
@@ -72,7 +83,7 @@ def main():
     # Initialize the variables that we carry over batch after batch
     rest = bytes("", encoding=s['encoding'])  # Start without a rest
     sweep_count = 0
-    next_header = [0, 0]
+    next_header = [0, 0]  # Signals an invalid header to trigger a find_start
     counter_decimation = 0  # Rolling counter, keeps track of software decimation across batches
 
     # Create shared variable to communicate with the sub-processes
@@ -103,8 +114,10 @@ def main():
         while time.perf_counter() - t0 < s['duration']:  # Endless if np.inf
             # II.1. Read a batch
             t1 = time.perf_counter()
-            raw_usb_data = fmcw3.device.read(s['byte_usb_read'])
+            raw_usb_data = fpga.device.read(s['byte_usb_read'])
+            # raw_usb_data = raw_usb.get(True, s['timeout'])  # For later
             timing.append(time.perf_counter()-t1)
+
             if len(raw_usb_data) != 0:
                 # II.2. Write the binary data to file
                 raw_usb_data_to_file.put(raw_usb_data)
@@ -129,7 +142,7 @@ def main():
                             'channel': channel,
                             'data': batch_ch[channel][index]
                         }  # Better for readability
-                        decoded_data_to_file.put([row['ts'], row['sweep_count'], row['channel'], row['data'].tolist()])
+                        decoded_data_to_file.put([row['ts'], row['sweep_count'], row['channel'], *row['data'].tolist()])
 
                 # II.3.2. Refresh the plots via shared variables
                 for index_sweep in range(sweep_count, new_sweep_count):
@@ -163,12 +176,13 @@ def main():
     # 4. Close properly all objects when done
     finally:
         # 1. Close the FMCW device
-        fmcw3.set_adc(oe1=True, shdn1=True, shdn2=True)
-        fmcw3.set_channels(a=False, b=False)
-        fmcw3.clear_gpio(led=True, adf_ce=True)
-        fmcw3.set_gpio(pa_off=True)
-        fmcw3.clear_buffer()
-        fmcw3.close()
+        fpga.set_adc(oe1=True, shdn1=True, shdn2=True)
+        fpga.set_channels(a=False, b=False)
+        fpga.clear_gpio(led=True, adf_ce=True)
+        fpga.set_gpio(pa_off=True)
+        fpga.clear_buffer()
+        fpga.close()
+        #fpga_reader.terminate()  # Stop reading the FPGA
         # 2. Close the queues
         raw_usb_data_to_file.put('')
         decoded_data_to_file.put('')
@@ -179,15 +193,15 @@ def main():
         process_if.terminate()
         process_angle.terminate()
         process_range_time.terminate()
-    print("Results: mean = {}, std = {}\n{}".format(np.mean(timing), np.std(timing), timing))
+    print("Read timing results: mean = {:.6f} s, std = {:.6f} s".format(np.mean(timing), np.std(timing)))
 
 
 """------------------------------------------------------------------------------------------------------------------"""
 """I. Parameters setup"""
 # I.1. Command line arguments
 ap = argparse.ArgumentParser()
-ap.add_argument("-d", "--duration", type=int, default=10, help="duration of the recording [s]")
-ap.add_argument("-f", "--log_folder", type=str, default=os.getcwd(), help="Path to folder containing the output logs")
+ap.add_argument("-d", "--duration", type=int, default=60, help="duration of the recording [s]")
+ap.add_argument("-f", "--log_folder", type=str, default=os.path.join(os.getcwd(), 'Recordings'), help="Path to folder containing the output logs")
 args = vars(ap.parse_args())
 duration = args["duration"]
 if duration == 0:
@@ -199,7 +213,7 @@ binary = True
 # I.2. [USER] USER PARAMETERS: FEEL FREE TO EDIT
 s_gen = {
     'duration': duration,
-    'byte_usb_read': 0x10000,
+    'byte_usb_read': 0x1000,
     'bw': 600e6,
     't_sweep': 1e-3,
     't_delay': 2e-3,
@@ -208,9 +222,9 @@ s_gen = {
     'acquisition_decimate': 2,
     'soft_decimate': 0,
     'max_range': 50,
-    'refresh_period': 0.25,
-    'range_time_to_display': 1,
-    'real_time_recall': duration//10,
+    'refresh_period': 0.125,
+    'range_time_to_display': 10,
+    'real_time_recall': max(duration//10, 1),
     'subtract_background': False,
     'subtract_clutter': 0,
     'flag_Hanning': False
@@ -230,9 +244,16 @@ s_tech = {
     'pa_off_advance': 0.2e-3,
     'encoding': encoding,
     'timeout': 0.5,
+    'patience_valid_header': 10,
     'path_settings': os.path.join(path_log_folder, ts+'settings.csv'),
     'path_raw_log': os.path.join(path_log_folder, ts+'fmcw3.log'),
     'path_csv_log': os.path.join(path_log_folder, ts+'fmcw3.csv')
+}
+
+s_display = {
+    'cblim_if': [-1, 1],
+    'cblim_angle': [40, 80],
+    'cblim_range_time': [-100, 0],
 }
 
 # I.4. [FROZEN] DESIGN & CALCULATED PARAMETERS. THEY SHOULD NOT BE MODIFIED
@@ -260,15 +281,16 @@ s_calc = {
     'adc_bytes': s_hw['adc_bits']//8 + 1,
     'range_adc': s_hw['c']*s_hw['if_amplifier_bandwidth']/(2*s_gen['bw']/s_gen['t_sweep']),
     'sweep_length': int(s_gen['t_sweep'] * s_hw['if_amplifier_bandwidth']),
-    'overall_decimate': (s_gen['soft_decimate'] + 1) * (s_gen['acquisition_decimate'] + 1)
+    'overall_decimate': (s_gen['soft_decimate'] + 1) * (s_gen['acquisition_decimate'] + 1),
 }
 s_calc['T'] = (s_gen['t_sweep'] + s_gen['t_delay']) * s_calc['overall_decimate']
 s_calc['refresh_stride'] = round(s_gen['refresh_period']/s_calc['T']) if s_gen['refresh_period'] >= s_calc['T'] else 1
 s_calc['nbytes_sweep'] = s_calc['channel_count']*s_calc['sweep_length']*s_calc['adc_bytes']  # in byte
 s_calc['nb_values_sweep'] = s_calc['channel_count']*s_calc['sweep_length']  # length of a 1D array containing a sweep
+s_calc['patience_data_length'] = s_tech['patience_valid_header']*s_calc['nbytes_sweep']
 
 # Merge all dictionaries together
-s_temporary = {**s_gen, **active_channels, **s_tech, **s_hw, **s_calc}
+s_temporary = {**s_gen, **active_channels, **s_tech, **s_display, **s_hw, **s_calc}
 
 
 # I.5. Make the settings dictionary read only
@@ -306,3 +328,17 @@ if __name__ == '__main__':
     except PermissionError:
         print("[INFO] Process set to niceness", os.nice(0))  # Highest priority for users
     main()
+
+    """[Display overall range time when done]"""
+    # Once the main is over, let's plot the overall range-time shall we?
+    path = '/home/alex/Desktop/Helico/5_Radar/src/Recordings'
+    #ts = '190820_115214_'
+    s = display.import_settings(path, ts)  # Reuse timestamp
+    ch = display.import_csv(path, ts, s)
+    t = np.linspace(0, s['overall_decimate'] * len(ch[1]) * (s['t_sweep'] + s['t_delay']), len(ch[1]))
+
+    im, nb_sweeps, _ = postprocessing.calculate_range_time(ch, s)
+
+    display.plot_range_time(t, im, s, ts)
+    """"""
+
