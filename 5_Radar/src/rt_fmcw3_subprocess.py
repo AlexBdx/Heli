@@ -5,7 +5,7 @@ import argparse
 import os
 import numpy as np
 import multiprocessing as mp
-mp.set_start_method('spawn', force=True)  # starts a fresh python interpreter process
+
 
 
 from fmcw import *
@@ -35,23 +35,12 @@ def main():
     :return: Void
     """
     """I. Set up various parameters"""
-    # I.1. Set up ADC and FPGA objects
-    adf4158 = adc.ADF4158()
-
-    fpga = ftdi.FPGA(adf4158, encoding=s['encoding'])
-    fpga.set_gpio(led=True, adf_ce=True)
-    fpga.set_adc(oe2=True)
-    fpga.clear_adc(oe1=True, shdn1=True, shdn2=True)
-    real_delay = fpga.set_sweep(s['f0'], s['bw'], s['t_sweep'], s['t_delay'])  # Returned value delay not used
-    print("[INFO] Real delay between sweeps: {} s".format(real_delay))
-    fpga.set_downsampler(enable=s['down_sampler'], quarter=s['quarter'])
-    fpga.write_sweep_timer(s['t_sweep'])
-    fpga.write_sweep_delay(s['t_delay'])
-    fpga.write_decimate(s['acquisition_decimate'])
-    fpga.write_pa_off_timer(s['t_delay'] - s['pa_off_advance'])
-    fpga.clear_gpio(pa_off=True)
-    fpga.clear_buffer()
-    fpga.set_channels(a=s[1], b=s[2])  # Would not scale up
+    # I.1. Create a subprocess that will read the FPGA
+    parent_end, child_end = mp.Pipe()  # Duplex pipe
+    fpga = preprocessing.fpga_reader(child_end, s)
+    process_info = parent_end.recv()
+    print("[INFO] FPGA reader's PID is", process_info['pid'])
+    fpga.start()  # Start the reader right away
 
     # I.2. Create all the bases needed for the plots
     t, f, d, angles = postprocessing.create_bases(s)
@@ -60,16 +49,6 @@ def main():
     tfd_angles = (t, f, d, angles, angle_mask)
 
     # I.3. Multiprocessing related objects
-    """[To do]
-    # Create a subprocess that will read the FPGA
-    def read_fpga(fpga_object, queue, s):
-        while True:
-            queue.put(fpga_object.device.read(s['byte_usb_read']))
-    raw_usb = Queue()
-    fpga_reader = mp.Process(target=read_fpga, args=(raw_usb,))
-    fpga_reader.start()
-    """
-
     # Write raw data directly to file
     raw_usb_data_to_file = Queue()
     write_raw_to_file = postprocessing.Writer(raw_usb_data_to_file, s, encoding='latin1')  # Spawn a new thread
@@ -82,7 +61,7 @@ def main():
 
     # Initialize the variables that we carry over batch after batch
     rest = bytes("", encoding=s['encoding'])  # Start without a rest
-    sweep_count = 0
+    sweep_count = 0  # Overall number of sweeps processed
     next_header = [0, 0]  # Signals an invalid header to trigger a find_start
     counter_decimation = 0  # Rolling counter, keeps track of software decimation across batches
 
@@ -109,25 +88,23 @@ def main():
 
     """II. Data Acquisition"""
     timing = []
+    counter_zero = 0
     try:
         t0 = time.perf_counter()  # Keep track of starting time
         while time.perf_counter() - t0 < s['duration']:  # Endless if np.inf
             # II.1. Read a batch
             t1 = time.perf_counter()
             # raw_usb_data = fpga.device.read(s['byte_usb_read'])
-            # raw_usb_data = raw_usb.get(True, s['timeout'])  # For later
-            # Try with subcalls
-            raw_usb_data = ''
-            for _ in range(s['sub_read']):
-                added_data = fpga.device.read(s['byte_usb_read']//s['sub_read'])
-                # print(len(added_data))
-                raw_usb_data += added_data
+            # raw_usb_data = raw_usb.get(True, s['timeout'])  # A subprocess reads the data from the FPGA
+            raw_usb_data = b""
+            for _ in range(s['sub_call']):
+                raw_usb_data += parent_end.recv_bytes()
             timing.append(time.perf_counter()-t1)
 
             if len(raw_usb_data) != 0:
                 # II.2. Write the binary data to file
-                raw_usb_data_to_file.put(raw_usb_data)
-                if type(raw_usb_data) == str:
+                raw_usb_data_to_file.put(str(raw_usb_data))
+                if type(raw_usb_data) == str:  # If device is opened in text mode
                     raw_usb_data = bytes(raw_usb_data, encoding=s['encoding'])
 
                 # II.3. Process the batch
@@ -139,6 +116,7 @@ def main():
                                                                                              sweep_count,
                                                                                              verbose=False)
 
+                counter_zero += len(batch_ch['skipped_sweeps'])  # Count how many zeros were added
                 # II.3.1. Send that new batch to be written to the csv file
                 for index in range(len(batch_ch[s['active_channels'][0]])):  # There is at least one channel
                     for channel in s['active_channels']:  # All channels
@@ -159,7 +137,7 @@ def main():
                         # 1. Update the time_stamp entries
                         time_stamp[0] = index_sweep
                         time_stamp[1] = s['T'] * index_sweep
-                        time_stamp[2] = time.perf_counter() - t0
+                        time_stamp[2] = time.perf_counter() - t0  # Time since data was sent by FPGA
                         time_stamp[3] = int(1000 * (s['T'] * index_sweep - int(s['T'] * index_sweep)))
 
                         # 2. Copy the relevant sweep data to the shared array
@@ -182,13 +160,9 @@ def main():
     # 4. Close properly all objects when done
     finally:
         # 1. Close the FMCW device
-        fpga.set_adc(oe1=True, shdn1=True, shdn2=True)
-        fpga.set_channels(a=False, b=False)
-        fpga.clear_gpio(led=True, adf_ce=True)
-        fpga.set_gpio(pa_off=True)
-        fpga.clear_buffer()
-        fpga.close()
-        #fpga_reader.terminate()  # Stop reading the FPGA
+        #parent_end.send("Any data sent will make the process return")  # Close the sub process
+        fpga.terminate()
+
         # 2. Close the queues
         raw_usb_data_to_file.put('')
         decoded_data_to_file.put('')
@@ -199,14 +173,17 @@ def main():
         process_if.terminate()
         process_angle.terminate()
         process_range_time.terminate()
-    print("Read timing results: mean = {:.6f} s, std = {:.6f} s".format(np.mean(timing), np.std(timing)))
+
+    print("[INFO] Total sweeps: {} | Zeros: {} | Ratio: {:.1f} %"
+          .format(sweep_count, counter_zero, 100*(1-counter_zero/sweep_count)))
+    print("[INFO] Read timing results: mean = {:.6f} s, std = {:.6f} s".format(np.mean(timing), np.std(timing)))
 
 
 """------------------------------------------------------------------------------------------------------------------"""
 """I. Parameters setup"""
 # I.1. Command line arguments
 ap = argparse.ArgumentParser()
-ap.add_argument("-d", "--duration", type=int, default=60, help="duration of the recording [s]")
+ap.add_argument("-d", "--duration", type=int, default=10, help="duration of the recording [s]")
 ap.add_argument("-f", "--log_folder", type=str, default=os.path.join(os.getcwd(), 'Recordings'), help="Path to folder containing the output logs")
 args = vars(ap.parse_args())
 duration = args["duration"]
@@ -220,7 +197,7 @@ binary = True
 s_gen = {
     'duration': duration,
     'byte_usb_read': 0x1000,
-    'sub_read': 8,
+    'sub_call': 1,
     'bw': 600e6,
     't_sweep': 1e-3,
     't_delay': 2e-3,
@@ -250,7 +227,7 @@ s_tech = {
     'swap_chs': True,
     'pa_off_advance': 0.2e-3,
     'encoding': encoding,
-    'timeout': 0.5,
+    'timeout': 1,
     'patience_valid_header': 10,
     'path_settings': os.path.join(path_log_folder, ts+'settings.csv'),
     'path_raw_log': os.path.join(path_log_folder, ts+'fmcw3.log'),
@@ -329,11 +306,15 @@ s.set_read_state(read_only=True)  # Set as read only
 
 """II. Run the main loop"""
 if __name__ == '__main__':
+    mp.set_start_method('spawn', force=True)  # starts a fresh python interpreter process
     # Try to max out the priority of the process
     try:
         print("[INFO] Process set to niceness", os.nice(-20))  # Only root processes can be below 0
     except PermissionError:
         print("[INFO] Process set to niceness", os.nice(0))  # Highest priority for users
+
+
+
     main()
 
     """[Display overall range time when done]"""
